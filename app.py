@@ -27,7 +27,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TRAINING_PATH = os.path.join(BASE_DIR, "training_data.pkl")
 ABOUT_PATH = os.path.join(BASE_DIR, "about_you.pkl")
 
-
 # ============================================
 # DATA STORAGE (LATEST ONLY – OVERWRITE)
 # ============================================
@@ -65,9 +64,16 @@ class SimpleDataStore:
             'major': survey.get('major'),
             'work_in_group': survey.get('workInGroup'),
             'work_location': survey.get('workLocation'),
+
+            # Preferred time ranking (1–3)
             'preferred_time_1': time_prefs[0].get('time') if len(time_prefs) > 0 else None,
             'preferred_time_2': time_prefs[1].get('time') if len(time_prefs) > 1 else None,
             'preferred_time_3': time_prefs[2].get('time') if len(time_prefs) > 2 else None,
+
+            # NEW: min/max work time (raw strings like "08:00", "22:00")
+            'min_work_time': survey.get('minWorkTime'),
+            'max_work_time': survey.get('maxWorkTime'),
+
             'num_courses': len(courses),
             'num_pdfs': len(pdf_data),
             'num_calendar_events': len(calendar_events),
@@ -96,6 +102,8 @@ class SimpleDataStore:
             'preferred_time_1': new_row['preferred_time_1'],
             'preferred_time_2': new_row['preferred_time_2'],
             'preferred_time_3': new_row['preferred_time_3'],
+            'min_work_time': new_row['min_work_time'],
+            'max_work_time': new_row['max_work_time'],
         }
         
         # 🔁 OVERWRITE both DataFrames with a single row
@@ -132,10 +140,8 @@ class SimpleDataStore:
         self.about_df.to_csv(os.path.join(BASE_DIR, about_csv), index=False)
         return training_csv, about_csv
 
-
 # Initialize global datastore
 data_store = SimpleDataStore()
-
 
 # ============================================
 # HELPERS
@@ -176,7 +182,6 @@ def parse_ics_file(ics_path):
     except Exception as e:
         print(f"❌ Error parsing ICS: {e}")
         return []
-
 
 # ============================================
 # ROUTES
@@ -297,12 +302,12 @@ def stats():
     
     return jsonify({
         'total_records': len(df),  # effectively 1
-        'majors': df['major'].value_counts().to_dict(),
-        'avg_courses': float(df['num_courses'].mean()),
+        'majors': df['major'].value_counts().to_dict() if 'major' in df.columns else {},
+        'avg_courses': float(df['num_courses'].mean()) if 'num_courses' in df.columns and len(df) > 0 else 0,
         'common_location': df['work_location'].mode()[0]
             if 'work_location' in df.columns and len(df['work_location'].mode()) > 0
             else None,
-        'total_pdfs_uploaded': int(df['num_pdfs'].sum())
+        'total_pdfs_uploaded': int(df['num_pdfs'].sum()) if 'num_pdfs' in df.columns else 0
     })
 
 
@@ -313,7 +318,6 @@ def health():
         'records_training': len(data_store.df),
         'records_about': len(data_store.about_df)
     })
-
 
 # ============================================
 # MAIN
@@ -328,5 +332,5 @@ if __name__ == "__main__":
     print(f"📈 Current records (about):    {len(data_store.about_df)}\n")
     app.run(host="0.0.0.0", port=port, debug=True)
 
-
 # source venv/bin/activate
+
