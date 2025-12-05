@@ -9,7 +9,16 @@ from icalendar import Calendar
 import pandas as pd
 import tempfile
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+
+current_directory = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Build the exact paths to your static and template folders
+template_dir = os.path.join(current_directory, 'templates')
+static_dir = os.path.join(current_directory, 'static')
+
+# 3. Tell Flask to use these specific paths
+app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
+#app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)
 
 # ============================================
