@@ -1,0 +1,104 @@
+:root {
+  /* --- Retro Palette --- */
+  --retro-bg: #FFF8E7;        /* Warm Cream */
+  --card-bg: #FFFEF9;         
+  --body-bg: #E8DCC4;         /* Tan/Beige */
+  --grid-line: #D4C5A9;       
+  --retro-ink: #2C1810;       
+  --accent-primary: #8B7355;  
+  --accent-secondary: #C57B72;
+  --accent-cyan: #10b981; /* Success Green */
+  
+  --font-header: 'Space Mono', monospace;
+  --font-body: 'Karla', sans-serif;
+}
+
+body {
+  background-color: var(--body-bg);
+  color: var(--retro-ink);
+  font-family: var(--font-body);
+  margin: 0;
+  padding: 40px 20px;
+  background-image: 
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.retro-container { max-width: 800px; margin: 0 auto; }
+
+/* Header */
+.retro-header-section {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    margin-bottom: 40px; border-bottom: 3px solid var(--retro-ink); padding-bottom: 10px;
+}
+.header-text h1 { font-family: var(--font-header); font-size: 2.5rem; margin: 0; letter-spacing: -1px; }
+.header-text .subtitle { font-family: var(--font-header); margin: 5px 0 0 0; opacity: 0.7; }
+.retro-star-badge {
+    width: 60px; height: 60px; background: var(--retro-ink); color: var(--retro-bg);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-header); font-weight: bold; transform: rotate(15deg);
+}
+
+/* Cards */
+.retro-card {
+    background: var(--card-bg);
+    border: 2px solid var(--retro-ink);
+    box-shadow: 6px 6px 0px var(--accent-primary);
+    border-radius: 8px;
+    padding: 25px;
+    margin-bottom: 30px;
+    position: relative;
+}
+
+.card-header-pill {
+    position: absolute; top: -12px; left: 20px;
+    background: var(--retro-ink); color: var(--retro-bg);
+    padding: 4px 12px; font-family: var(--font-header); font-size: 0.8rem;
+    border-radius: 20px; text-transform: uppercase;
+}
+
+/* Grids & Inputs */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.schedule-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+.field label { display: block; font-weight: 700; margin-bottom: 8px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; }
+
+select, input[type="text"], input[type="date"], input[type="file"] {
+    width: 100%; padding: 10px;
+    background: transparent; border: 2px solid var(--grid-line);
+    border-radius: 4px; font-family: var(--font-body); font-size: 1rem;
+    color: var(--retro-ink); box-sizing: border-box;
+}
+select:focus, input:focus { outline: none; border-color: var(--retro-ink); }
+
+/* Time Pickers */
+.time-picker { display: flex; align-items: center; }
+.time-picker select { flex: 1; text-align: center; }
+
+/* Buttons */
+.btn {
+    width: 100%; padding: 15px; border: 2px solid var(--retro-ink);
+    font-family: var(--font-header); font-weight: bold; font-size: 1rem;
+    cursor: pointer; transition: all 0.2s; text-transform: uppercase;
+}
+.btn-primary { background: var(--retro-ink); color: var(--retro-bg); box-shadow: 4px 4px 0px rgba(0,0,0,0.2); }
+.btn-primary:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0px rgba(0,0,0,0.2); }
+
+.btn-dashed { background: transparent; border-style: dashed; color: var(--retro-ink); margin-top: 15px; }
+.btn-dashed:hover { background: rgba(0,0,0,0.05); }
+
+/* Assignment Row */
+.syllabus-row {
+    display: flex; gap: 10px; align-items: flex-end;
+    padding: 10px; border-bottom: 1px solid var(--grid-line);
+    margin-bottom: 10px;
+}
+.btn-delete {
+    background: none; border: none; font-size: 1.5rem; color: var(--accent-secondary);
+    cursor: pointer; line-height: 1;
+}
+
+@media (max-width: 600px) {
+    .grid-2, .schedule-grid { grid-template-columns: 1fr; }
+}
