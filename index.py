@@ -48,7 +48,6 @@ CHUNK_SIZE = 60
 # --- PREDICTIVE MODEL ---
 # Access the fitted model and columns directly from the module
 model = predictive_model.model
-model_columns = predictive_model.model_columns
 
 # Verification Log
 if model:
