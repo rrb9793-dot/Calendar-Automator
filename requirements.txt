@@ -10,3 +10,4 @@ ics
 icalendar
 recurring-ical-events
 python-dateutil
+whitenoise 
