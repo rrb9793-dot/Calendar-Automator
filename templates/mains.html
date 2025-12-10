@@ -11,10 +11,15 @@
 
     <div class="retro-container">
         
+        <div class="field" style="margin-bottom: 20px;">
+            <label>Student Email</label>
+            <input type="email" id="email" placeholder="student@university.edu" style="border-color: var(--accent-primary);">
+        </div>
+
         <div class="retro-header-section">
             <div class="header-text">
                 <h1>student_os</h1>
-                <p class="subtitle">v2.0 // ai_scheduler_module</p>
+                <p class="subtitle">v2.1 // data_collection_module</p>
             </div>
             <div class="retro-star-badge">
                 <span>OS</span>
@@ -36,8 +41,18 @@
                 </div>
                 <div class="field">
                     <label>Primary Major</label>
-                    <select id="major" class="major-select">
-                        <option value="">Loading Majors...</option>
+                    <select id="major" class="major-select"></select>
+                </div>
+                <div class="field">
+                    <label>Second Concentration</label>
+                    <select id="second_concentration" class="major-select">
+                        <option value="N/A">N/A</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Minor</label>
+                    <select id="minor" class="major-select">
+                        <option value="N/A">N/A</option>
                     </select>
                 </div>
             </div>
