@@ -11,3 +11,4 @@ icalendar
 recurring-ical-events
 python-dateutil
 whitenoise 
+psycopg2-binary
