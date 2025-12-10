@@ -11,11 +11,6 @@
 
     <div class="retro-container">
         
-        <div class="field" style="margin-bottom: 20px;">
-            <label>Student Email</label>
-            <input type="email" id="email" placeholder="student@university.edu" style="border-color: var(--accent-primary);">
-        </div>
-
         <div class="retro-header-section">
             <div class="header-text">
                 <h1>student_os</h1>
@@ -23,6 +18,14 @@
             </div>
             <div class="retro-star-badge">
                 <span>OS</span>
+            </div>
+        </div>
+
+        <div class="retro-card">
+            <div class="card-header-pill">Identity</div>
+            <div class="field">
+                <label>Student Email</label>
+                <input type="email" id="email" placeholder="student@university.edu">
             </div>
         </div>
 
@@ -86,9 +89,7 @@
 
         <div class="retro-card">
             <div class="card-header-pill">Task Queue</div>
-            
             <div id="assignmentsContainer"></div>
-            
             <button id="addAssignmentBtn" class="btn btn-dashed">+ Add Assignment Node</button>
         </div>
 
@@ -116,7 +117,6 @@
         </div>
 
     </div>
-
     <script src="{{ url_for('static', filename='mains.js') }}"></script>
 </body>
 </html>
