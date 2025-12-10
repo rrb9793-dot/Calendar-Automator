@@ -8,9 +8,6 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
 
-# --- DATABASE IMPORTS ---
-import psycopg2 
-
 # --- CUSTOM MODULES ---
 import predictive_model 
 import syllabus_parser 
@@ -34,41 +31,11 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # ==========================================
-# DATABASE CONFIGURATION
-# ==========================================
-# We use os.environ.get to prefer Railway's auto-injected variables, 
-# falling back to your hardcoded strings if needed.
-DB_NAME = os.environ.get("PGDATABASE", "railway")
-DB_USER = os.environ.get("PGUSER", "postgres")
-DB_PASSWORD = os.environ.get("PGPASSWORD", "mOUfapERMofXipKrrolKOZYGpKgzuokF")
-DB_HOST = os.environ.get("PGHOST", "postgres.railway.internal")
-DB_PORT = os.environ.get("PGPORT", "5432")
-
-def get_db_connection():
-    try:
-        conn = psycopg2.connect(
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT
-        )
-        return conn
-    except Exception as e:
-        print(f"❌ Database Connection Error: {e}")
-        return None
-
-# ==========================================
 # ROUTES
 # ==========================================
 
 @app.route('/', methods=['GET'])
 def home():
-    # Test DB connection on home load (optional, just for debugging logs)
-    conn = get_db_connection()
-    if conn:
-        print("✅ DB Connected Successfully")
-        conn.close()
     return render_template('mains.html')
 
 @app.route('/download/<filename>')
@@ -81,15 +48,13 @@ def generate_schedule():
         # ---------------------------------------------------------
         # 1. GATHER INPUTS
         # ---------------------------------------------------------
-        
-        # A. Metadata (Survey & Preferences)
         data_str = request.form.get('data')
         req_data = json.loads(data_str) if data_str else {}
         
         frontend_prefs = req_data.get('preferences', {})
-        frontend_survey = req_data.get('survey', {})
-        
-        # B. User ICS Files (Busy Time)
+        # Survey data is here if you need it later: req_data.get('survey', {})
+
+        # B. User ICS Files
         ics_files_bytes = []
         if 'ics' in request.files and request.files['ics'].filename != '':
             ics_file = request.files['ics']
@@ -97,22 +62,20 @@ def generate_schedule():
             ics_file.seek(0) 
 
         # ---------------------------------------------------------
-        # 2. PDF PARSING (Syllabus -> Assignments)
+        # 2. PDF PARSING
         # ---------------------------------------------------------
         assignments_list = []
-        
         uploaded_pdfs = request.files.getlist('pdfs')
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
             pdf_dfs = []
             for pdf in uploaded_pdfs:
                 if pdf.filename == '': continue
-                
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
-                # Run Syllabus Parser
+                # Parse
                 df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                 if df is not None and not df.empty:
                     pdf_dfs.append(df)
@@ -125,10 +88,8 @@ def generate_schedule():
                 assignments_list.extend(parsed_records)
 
         # ---------------------------------------------------------
-        # 3. PREPARE DATA FOR CALENDAR MAKER
+        # 3. PREPARE & RUN CALENDAR MAKER
         # ---------------------------------------------------------
-        
-        # Map Frontend Preferences -> Calendar Maker Format
         backend_preferences = {
             "timezone": "America/New_York",
             "work_windows": {
@@ -139,7 +100,6 @@ def generate_schedule():
             }
         }
 
-        # Format Assignments for Calendar Maker
         formatted_assignments = []
         for i, item in enumerate(assignments_list):
             formatted_assignments.append({
@@ -156,18 +116,12 @@ def generate_schedule():
             "assignments": formatted_assignments
         }
 
-        # ---------------------------------------------------------
-        # 4. RUN CALENDAR MAKER
-        # ---------------------------------------------------------
         result = calendar_maker.process_schedule_request(
             calendar_input_data, 
             ics_files_bytes,
             app.config['UPLOAD_FOLDER']
         )
 
-        # ---------------------------------------------------------
-        # 5. RESPONSE
-        # ---------------------------------------------------------
         return jsonify({
             'message': 'Success',
             'ics_url': f"/download/{result['ics_filename']}",
