@@ -8,10 +8,13 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
 
+# --- DATABASE IMPORTS ---
+import psycopg2 
+
 # --- CUSTOM MODULES ---
 import predictive_model 
 import syllabus_parser 
-import calendar_maker  # <--- New Import
+import calendar_maker
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -31,11 +34,41 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # ==========================================
+# DATABASE CONFIGURATION
+# ==========================================
+# We use os.environ.get to prefer Railway's auto-injected variables, 
+# falling back to your hardcoded strings if needed.
+DB_NAME = os.environ.get("PGDATABASE", "railway")
+DB_USER = os.environ.get("PGUSER", "postgres")
+DB_PASSWORD = os.environ.get("PGPASSWORD", "mOUfapERMofXipKrrolKOZYGpKgzuokF")
+DB_HOST = os.environ.get("PGHOST", "postgres.railway.internal")
+DB_PORT = os.environ.get("PGPORT", "5432")
+
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        return conn
+    except Exception as e:
+        print(f"❌ Database Connection Error: {e}")
+        return None
+
+# ==========================================
 # ROUTES
 # ==========================================
 
 @app.route('/', methods=['GET'])
 def home():
+    # Test DB connection on home load (optional, just for debugging logs)
+    conn = get_db_connection()
+    if conn:
+        print("✅ DB Connected Successfully")
+        conn.close()
     return render_template('mains.html')
 
 @app.route('/download/<filename>')
@@ -59,10 +92,8 @@ def generate_schedule():
         # B. User ICS Files (Busy Time)
         ics_files_bytes = []
         if 'ics' in request.files and request.files['ics'].filename != '':
-            # Read bytes directly for calendar_maker
             ics_file = request.files['ics']
             ics_files_bytes.append(ics_file.read())
-            # Reset pointer if we needed to save it, but here we just pass bytes
             ics_file.seek(0) 
 
         # ---------------------------------------------------------
@@ -70,10 +101,6 @@ def generate_schedule():
         # ---------------------------------------------------------
         assignments_list = []
         
-        # Get manual courses if any
-        # assignments_list.extend(req_data.get('courses', []))
-
-        # Process Uploaded PDFs
         uploaded_pdfs = request.files.getlist('pdfs')
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
@@ -81,7 +108,6 @@ def generate_schedule():
             for pdf in uploaded_pdfs:
                 if pdf.filename == '': continue
                 
-                # Save temporarily for parsing
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
@@ -95,8 +121,6 @@ def generate_schedule():
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
                 final_df = syllabus_parser.consolidate_assignments(master_df)
-                
-                # Convert to Dictionary format
                 parsed_records = final_df.to_dict(orient='records')
                 assignments_list.extend(parsed_records)
 
@@ -106,7 +130,7 @@ def generate_schedule():
         
         # Map Frontend Preferences -> Calendar Maker Format
         backend_preferences = {
-            "timezone": "America/New_York", # Default or grab from frontend if available
+            "timezone": "America/New_York",
             "work_windows": {
                 "weekday_start_hour": float(frontend_prefs.get('weekdayStart', '09:00').split(':')[0]),
                 "weekday_end_hour": float(frontend_prefs.get('weekdayEnd', '22:00').split(':')[0]),
@@ -123,11 +147,10 @@ def generate_schedule():
                 "name": item.get("Assignment", "Untitled Task"),
                 "class_name": item.get("Course", "General"),
                 "due_date": item.get("Date"), 
-                "time_estimate": 2.0, # Placeholder until Prediction Model is integrated
+                "time_estimate": 2.0, 
                 "assignment_type": item.get("Category", "p_set")
             })
 
-        # Construct Final JSON Payload
         calendar_input_data = {
             "user_preferences": backend_preferences,
             "assignments": formatted_assignments
