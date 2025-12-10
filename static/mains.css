@@ -64,7 +64,13 @@ body {
 
 .field label { display: block; font-weight: 700; margin-bottom: 8px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; }
 
-select, input[type="text"], input[type="date"], input[type="file"] {
+/* UPDATED: Added email and number types */
+select, 
+input[type="text"], 
+input[type="date"], 
+input[type="file"], 
+input[type="email"], 
+input[type="number"] {
     width: 100%; padding: 10px;
     background: transparent; border: 2px solid var(--grid-line);
     border-radius: 4px; font-family: var(--font-body); font-size: 1rem;
@@ -88,17 +94,38 @@ select:focus, input:focus { outline: none; border-color: var(--retro-ink); }
 .btn-dashed { background: transparent; border-style: dashed; color: var(--retro-ink); margin-top: 15px; }
 .btn-dashed:hover { background: rgba(0,0,0,0.05); }
 
-/* Assignment Row */
+/* UPDATED: Assignment Row Grid System */
 .syllabus-row {
-    display: flex; gap: 10px; align-items: flex-end;
-    padding: 10px; border-bottom: 1px solid var(--grid-line);
-    margin-bottom: 10px;
-}
-.btn-delete {
-    background: none; border: none; font-size: 1.5rem; color: var(--accent-secondary);
-    cursor: pointer; line-height: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr; /* 4 Columns */
+    gap: 15px;
+    padding: 20px;
+    border-bottom: 2px dashed var(--grid-line);
+    margin-bottom: 15px;
+    background-color: rgba(255,255,255,0.4);
+    align-items: end; /* Aligns labels and inputs nicely */
 }
 
-@media (max-width: 600px) {
-    .grid-2, .schedule-grid { grid-template-columns: 1fr; }
+/* Helpers for grid spanning */
+.span-2 { grid-column: span 2; }
+.span-4 { grid-column: span 4; }
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--retro-bg);
+    padding: 10px;
+    border: 1px dashed var(--grid-line);
+    border-radius: 4px;
+}
+
+.btn-delete {
+    background: none; border: none; font-size: 0.9rem; color: var(--accent-secondary);
+    cursor: pointer; text-decoration: underline; padding: 0;
+}
+
+@media (max-width: 700px) {
+    .grid-2, .schedule-grid, .syllabus-row { grid-template-columns: 1fr !important; }
+    .span-2, .span-4 { grid-column: span 1; }
 }
