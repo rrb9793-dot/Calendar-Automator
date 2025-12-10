@@ -32,7 +32,6 @@ LOCAL_TZ = ZoneInfo("America/New_York")
 
 # Load Predictive Model (kept as requested, even if unused for PDFs right now)
 model = predictive_model.model
-model_columns = predictive_model.model_columns
 
 if model:
     print("✅ Index.py: Predictive model loaded.")
