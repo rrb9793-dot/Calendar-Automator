@@ -1,4 +1,4 @@
-// --- CONFIGURATION ARRAYS ---
+// --- CONFIGURATION ---
 const MAJORS = [
     "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", 
     "Social Sciences", "Arts & Humanities", "Health & Education"
@@ -13,16 +13,15 @@ const RESOURCES = ["Textbook / class materials", "AI / Chatgpt", "Google/interne
 const LOCATIONS = ["At home/private setting", "School/library", "Other public setting (cafe, etc.)"];
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. Populate Dropdowns (Major, Second Conc, Minor)
+    // 1. Populate Dropdowns
     const majorSel = document.getElementById('major');
     const secSel = document.getElementById('second_concentration');
     const minorSel = document.getElementById('minor');
 
     const addOpts = (sel, includeNA=false) => {
-        sel.innerHTML = ''; // Clear
+        sel.innerHTML = ''; 
         if(includeNA) sel.add(new Option("N/A", "N/A"));
         else sel.add(new Option("-- Select --", ""));
-        
         MAJORS.forEach(m => sel.add(new Option(m, m)));
     };
 
@@ -36,11 +35,10 @@ document.addEventListener('DOMContentLoaded', () => {
     addAssignmentRow();
 });
 
-// --- TIME PICKER LOGIC ---
+// --- TIME PICKERS ---
 function initTimePickers() {
     document.querySelectorAll('.time-picker').forEach(container => {
-        if(container.children.length > 0) return; // Prevent double init
-        
+        if(container.children.length > 0) return;
         const hourSel = document.createElement('select');
         const minSel = document.createElement('select');
         for(let i=0; i<24; i++) {
@@ -58,7 +56,6 @@ function initTimePickers() {
         container.appendChild(minSel);
     });
 }
-
 function getPickerValue(id) {
     const container = document.getElementById(id);
     const selects = container.querySelectorAll('select');
@@ -71,19 +68,12 @@ const assignmentsContainer = document.getElementById('assignmentsContainer');
 function addAssignmentRow() {
     const div = document.createElement('div');
     div.className = 'syllabus-row';
-    // Use a grid layout for the larger number of inputs
-    div.style.display = "grid";
-    div.style.gridTemplateColumns = "1fr 1fr 1fr 1fr"; 
-    div.style.gap = "10px";
-    div.style.padding = "15px";
-    div.style.border = "1px solid var(--grid-line)";
-    div.style.backgroundColor = "rgba(255,255,255,0.5)";
-
-    // Helpers to build options
+    
+    // Helper to build options
     const buildOpts = (arr) => arr.map(x => `<option value="${x}">${x}</option>`).join('');
 
     div.innerHTML = `
-        <div style="grid-column: span 2;">
+        <div class="span-2">
             <label style="font-size:0.7rem;">Assignment Name</label>
             <input type="text" class="a-name" placeholder="Task Name">
         </div>
@@ -113,36 +103,32 @@ function addAssignmentRow() {
             <select class="a-location">${buildOpts(LOCATIONS)}</select>
         </div>
 
-        <div style="grid-column: span 2; display:flex; gap:15px; align-items:center;">
-            <label style="font-size:0.75rem; display:flex; align-items:center;">
+        <div class="span-2 checkbox-group">
+            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
                 <input type="checkbox" class="a-group" style="width:auto; margin-right:5px;"> Work in Group?
             </label>
-            <label style="font-size:0.75rem; display:flex; align-items:center;">
+            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
                 <input type="checkbox" class="a-person" style="width:auto; margin-right:5px;"> Submit In-Person?
             </label>
         </div>
 
-        <div style="grid-column: span 2; text-align:right;">
-            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()" style="font-size:0.9rem; text-decoration:underline;">Remove Task</button>
+        <div class="span-2" style="text-align:right;">
+            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove Task</button>
         </div>
     `;
     assignmentsContainer.appendChild(div);
 }
 document.getElementById('addAssignmentBtn').addEventListener('click', addAssignmentRow);
 
-// --- SUBMIT / DATA STORAGE LOGIC ---
+// --- SUBMIT ---
 document.getElementById('submitBtn').addEventListener('click', async () => {
     const btn = document.getElementById('submitBtn');
     btn.textContent = "PROCESSING...";
     btn.disabled = true;
 
     try {
-        // 1. STORE EMAIL
-        const email = document.getElementById('email').value;
-
-        // 2. STORE USER PROFILE (Survey Data)
         const surveyData = {
-            email: email, // Stored here
+            email: document.getElementById('email').value,
             year: document.getElementById('studentYear').value,
             major: document.getElementById('major').value,
             second_concentration: document.getElementById('second_concentration').value,
@@ -156,33 +142,26 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
             weekendEnd: getPickerValue('weekendEnd')
         };
 
-        // 3. STORE ASSIGNMENTS (Task Queue)
         const courses = [];
         document.querySelectorAll('.syllabus-row').forEach(row => {
-            // Collecting inputs from the specific row
             const item = {
                 assignment_name: row.querySelector('.a-name').value,
                 due_date: row.querySelector('.a-date').value,
                 work_sessions: parseInt(row.querySelector('.a-sessions').value) || 1,
-                
                 assignment_type: row.querySelector('.a-type').value,
                 field_of_study: row.querySelector('.a-field').value,
                 external_resources: row.querySelector('.a-resource').value,
                 work_location: row.querySelector('.a-location').value,
-                
-                // Convert Checkbox to Yes/No string if backend prefers, or boolean
                 work_in_group: row.querySelector('.a-group').checked ? "Yes" : "No",
                 submitted_in_person: row.querySelector('.a-person').checked ? "Yes" : "No"
             };
-
-            // Only add if basic fields are present
+            
             if (item.assignment_name && item.due_date) {
                 courses.push(item);
             }
         });
 
         const formData = new FormData();
-        // This 'data' string is what python parses
         formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
         const pdfInput = document.getElementById('pdfUpload');
