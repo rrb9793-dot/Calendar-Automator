@@ -2,6 +2,7 @@ import os
 import json
 import time
 import pandas as pd
+import psycopg2
 from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
@@ -25,10 +26,27 @@ app.wsgi_app = WhiteNoise(app.wsgi_app, root=STATIC_DIR, prefix='static/')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
-
+    
 # Constants
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LOCAL_TZ = ZoneInfo("America/New_York")
+
+#Database
+DB_NAME = "railway"             # PGDATABASE
+DB_USER = "postgres"            # PGUSER
+DB_PASSWORD = "mOUfapERMofXipKrrolKOZYGpKgzuokF"    # PGPASSWORD
+DB_HOST = "postgres.railway.internal"   # PGHOST
+DB_PORT = "5432"                # PGPORT
+
+def get_db_connection():
+    import psycopg2
+    return psycopg2.connect(
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT
+    )
 
 # Load Predictive Model (kept as requested, even if unused for PDFs right now)
 model = predictive_model.model
