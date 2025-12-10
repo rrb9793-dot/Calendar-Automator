@@ -2,7 +2,6 @@ import os
 import json
 import time
 import pandas as pd
-import psycopg2
 from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
@@ -11,7 +10,8 @@ from whitenoise import WhiteNoise
 
 # --- CUSTOM MODULES ---
 import predictive_model 
-import syllabus_parser # <--- The file above
+import syllabus_parser 
+import calendar_maker  # <--- New Import
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,35 +26,9 @@ app.wsgi_app = WhiteNoise(app.wsgi_app, root=STATIC_DIR, prefix='static/')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
-    
+
 # Constants
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-LOCAL_TZ = ZoneInfo("America/New_York")
-
-#Database
-DB_NAME = "railway"             # PGDATABASE
-DB_USER = "postgres"            # PGUSER
-DB_PASSWORD = "mOUfapERMofXipKrrolKOZYGpKgzuokF"    # PGPASSWORD
-DB_HOST = "postgres.railway.internal"   # PGHOST
-DB_PORT = "5432"                # PGPORT
-
-def get_db_connection():
-    import psycopg2
-    return psycopg2.connect(
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT
-    )
-
-# Load Predictive Model (kept as requested, even if unused for PDFs right now)
-model = predictive_model.model
-
-if model:
-    print("✅ Index.py: Predictive model loaded.")
-else:
-    print("❌ Index.py: Predictive model failed to load.")
 
 # ==========================================
 # ROUTES
@@ -64,52 +38,120 @@ else:
 def home():
     return render_template('mains.html')
 
+@app.route('/download/<filename>')
+def download_file(filename):
+    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
+
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
-        # 1. Parse other form data (survey, etc.)
+        # ---------------------------------------------------------
+        # 1. GATHER INPUTS
+        # ---------------------------------------------------------
+        
+        # A. Metadata (Survey & Preferences)
         data_str = request.form.get('data')
         req_data = json.loads(data_str) if data_str else {}
-        courses = req_data.get('courses', []) # Manual inputs
         
-        # 2. PDF Processing (The Core Task)
-        uploaded_pdfs = request.files.getlist('pdfs')
-        pdf_dfs = []
+        frontend_prefs = req_data.get('preferences', {})
+        frontend_survey = req_data.get('survey', {})
+        
+        # B. User ICS Files (Busy Time)
+        ics_files_bytes = []
+        if 'ics' in request.files and request.files['ics'].filename != '':
+            # Read bytes directly for calendar_maker
+            ics_file = request.files['ics']
+            ics_files_bytes.append(ics_file.read())
+            # Reset pointer if we needed to save it, but here we just pass bytes
+            ics_file.seek(0) 
 
+        # ---------------------------------------------------------
+        # 2. PDF PARSING (Syllabus -> Assignments)
+        # ---------------------------------------------------------
+        assignments_list = []
+        
+        # Get manual courses if any
+        # assignments_list.extend(req_data.get('courses', []))
+
+        # Process Uploaded PDFs
+        uploaded_pdfs = request.files.getlist('pdfs')
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
+            pdf_dfs = []
             for pdf in uploaded_pdfs:
                 if pdf.filename == '': continue
                 
-                # Save file temporarily
+                # Save temporarily for parsing
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
-                # Run YOUR parser
-                df = syllabus_parser.parse_syllabus_to_data(path)
+                # Run Syllabus Parser
+                df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                 if df is not None and not df.empty:
                     pdf_dfs.append(df)
             
-            # Consolidate Data
+            # Consolidate
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
                 final_df = syllabus_parser.consolidate_assignments(master_df)
                 
-                # Convert to dict to send back to frontend or pass to calendar_maker
-                parsed_courses = final_df.to_dict(orient='records')
-                
-                # Append to courses list (or handle separately)
-                # Note: The keys here match your parser (Course, Date, Time, etc.)
-                courses.extend(parsed_courses)
+                # Convert to Dictionary format
+                parsed_records = final_df.to_dict(orient='records')
+                assignments_list.extend(parsed_records)
 
-        # 3. Future Step: Calendar Maker 
-        # (You said you will add this later. For now, we return the parsed data)
+        # ---------------------------------------------------------
+        # 3. PREPARE DATA FOR CALENDAR MAKER
+        # ---------------------------------------------------------
         
+        # Map Frontend Preferences -> Calendar Maker Format
+        backend_preferences = {
+            "timezone": "America/New_York", # Default or grab from frontend if available
+            "work_windows": {
+                "weekday_start_hour": float(frontend_prefs.get('weekdayStart', '09:00').split(':')[0]),
+                "weekday_end_hour": float(frontend_prefs.get('weekdayEnd', '22:00').split(':')[0]),
+                "weekend_start_hour": float(frontend_prefs.get('weekendStart', '10:00').split(':')[0]),
+                "weekend_end_hour": float(frontend_prefs.get('weekendEnd', '20:00').split(':')[0])
+            }
+        }
+
+        # Format Assignments for Calendar Maker
+        formatted_assignments = []
+        for i, item in enumerate(assignments_list):
+            formatted_assignments.append({
+                "id": f"assign_{i}",
+                "name": item.get("Assignment", "Untitled Task"),
+                "class_name": item.get("Course", "General"),
+                "due_date": item.get("Date"), 
+                "time_estimate": 2.0, # Placeholder until Prediction Model is integrated
+                "assignment_type": item.get("Category", "p_set")
+            })
+
+        # Construct Final JSON Payload
+        calendar_input_data = {
+            "user_preferences": backend_preferences,
+            "assignments": formatted_assignments
+        }
+
+        # ---------------------------------------------------------
+        # 4. RUN CALENDAR MAKER
+        # ---------------------------------------------------------
+        result = calendar_maker.process_schedule_request(
+            calendar_input_data, 
+            ics_files_bytes,
+            app.config['UPLOAD_FOLDER']
+        )
+
+        # ---------------------------------------------------------
+        # 5. RESPONSE
+        # ---------------------------------------------------------
         return jsonify({
-            'message': 'Success', 
-            'courses': courses,
-            'info': 'PDFs parsed and consolidated. Ready for Calendar Maker.'
+            'message': 'Success',
+            'ics_url': f"/download/{result['ics_filename']}",
+            'stats': {
+                'scheduled': result['scheduled_count'],
+                'unscheduled': result['unscheduled_count']
+            }
         })
 
     except Exception as e:
