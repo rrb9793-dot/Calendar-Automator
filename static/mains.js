@@ -1,12 +1,34 @@
-// Config
-const MAJORS = ["Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", "Social Sciences", "Arts & Humanities", "Health & Education"];
-const ASSIGNMENT_TYPES = ["Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study"];
+// --- CONFIGURATION ARRAYS ---
+const MAJORS = [
+    "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", 
+    "Social Sciences", "Arts & Humanities", "Health & Education"
+];
+
+const ASSIGNMENT_TYPES = [
+    "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", 
+    "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study"
+];
+
+const RESOURCES = ["Textbook / class materials", "AI / Chatgpt", "Google/internet"];
+const LOCATIONS = ["At home/private setting", "School/library", "Other public setting (cafe, etc.)"];
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Populate Majors
-    const majorSelect = document.getElementById('major');
-    majorSelect.innerHTML = '<option value="">-- Select Field --</option>';
-    MAJORS.forEach(m => majorSelect.add(new Option(m, m)));
+    // 1. Populate Dropdowns (Major, Second Conc, Minor)
+    const majorSel = document.getElementById('major');
+    const secSel = document.getElementById('second_concentration');
+    const minorSel = document.getElementById('minor');
+
+    const addOpts = (sel, includeNA=false) => {
+        sel.innerHTML = ''; // Clear
+        if(includeNA) sel.add(new Option("N/A", "N/A"));
+        else sel.add(new Option("-- Select --", ""));
+        
+        MAJORS.forEach(m => sel.add(new Option(m, m)));
+    };
+
+    addOpts(majorSel, false);
+    addOpts(secSel, true);
+    addOpts(minorSel, true);
 
     // Init Time Pickers
     initTimePickers();
@@ -14,10 +36,11 @@ document.addEventListener('DOMContentLoaded', () => {
     addAssignmentRow();
 });
 
-// Time Pickers
+// --- TIME PICKER LOGIC ---
 function initTimePickers() {
     document.querySelectorAll('.time-picker').forEach(container => {
-        container.innerHTML = ''; 
+        if(container.children.length > 0) return; // Prevent double init
+        
         const hourSel = document.createElement('select');
         const minSel = document.createElement('select');
         for(let i=0; i<24; i++) {
@@ -42,45 +65,88 @@ function getPickerValue(id) {
     return `${selects[0].value}:${selects[1].value}`;
 }
 
-// Assignments
+// --- ASSIGNMENT ROW GENERATOR ---
 const assignmentsContainer = document.getElementById('assignmentsContainer');
+
 function addAssignmentRow() {
     const div = document.createElement('div');
     div.className = 'syllabus-row';
-    let typeOpts = `<option value="">Type...</option>`;
-    ASSIGNMENT_TYPES.forEach(t => typeOpts += `<option value="${t}">${t}</option>`);
+    // Use a grid layout for the larger number of inputs
+    div.style.display = "grid";
+    div.style.gridTemplateColumns = "1fr 1fr 1fr 1fr"; 
+    div.style.gap = "10px";
+    div.style.padding = "15px";
+    div.style.border = "1px solid var(--grid-line)";
+    div.style.backgroundColor = "rgba(255,255,255,0.5)";
+
+    // Helpers to build options
+    const buildOpts = (arr) => arr.map(x => `<option value="${x}">${x}</option>`).join('');
 
     div.innerHTML = `
-        <div style="flex:2;">
-            <label style="font-size:0.7rem; display:block; margin-bottom:2px;">Name</label>
-            <input type="text" class="assign-name" placeholder="Task Name" style="width:100%;">
+        <div style="grid-column: span 2;">
+            <label style="font-size:0.7rem;">Assignment Name</label>
+            <input type="text" class="a-name" placeholder="Task Name">
         </div>
-        <div style="flex:1.5;">
-            <label style="font-size:0.7rem; display:block; margin-bottom:2px;">Type</label>
-            <select class="assign-type" style="width:100%;">${typeOpts}</select>
+        <div>
+            <label style="font-size:0.7rem;">Due Date</label>
+            <input type="date" class="a-date">
         </div>
-        <div style="flex:1;">
-            <label style="font-size:0.7rem; display:block; margin-bottom:2px;">Due Date</label>
-            <input type="date" class="assign-date" style="width:100%;">
+        <div>
+            <label style="font-size:0.7rem;">Sessions Needed</label>
+            <input type="number" class="a-sessions" value="1" min="1">
         </div>
-        <button class="btn-delete" onclick="this.parentElement.remove()">×</button>
-        <div class="prediction-tag" style="display:none; margin-left:10px; font-size:0.8rem; color:var(--accent-secondary); font-weight:bold;"></div>
+
+        <div>
+            <label style="font-size:0.7rem;">Type</label>
+            <select class="a-type"><option value="">Select...</option>${buildOpts(ASSIGNMENT_TYPES)}</select>
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Field of Study</label>
+            <select class="a-field"><option value="">Select...</option>${buildOpts(MAJORS)}</select>
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Resources</label>
+            <select class="a-resource">${buildOpts(RESOURCES)}</select>
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Location</label>
+            <select class="a-location">${buildOpts(LOCATIONS)}</select>
+        </div>
+
+        <div style="grid-column: span 2; display:flex; gap:15px; align-items:center;">
+            <label style="font-size:0.75rem; display:flex; align-items:center;">
+                <input type="checkbox" class="a-group" style="width:auto; margin-right:5px;"> Work in Group?
+            </label>
+            <label style="font-size:0.75rem; display:flex; align-items:center;">
+                <input type="checkbox" class="a-person" style="width:auto; margin-right:5px;"> Submit In-Person?
+            </label>
+        </div>
+
+        <div style="grid-column: span 2; text-align:right;">
+            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()" style="font-size:0.9rem; text-decoration:underline;">Remove Task</button>
+        </div>
     `;
     assignmentsContainer.appendChild(div);
 }
 document.getElementById('addAssignmentBtn').addEventListener('click', addAssignmentRow);
 
-// Submit
+// --- SUBMIT / DATA STORAGE LOGIC ---
 document.getElementById('submitBtn').addEventListener('click', async () => {
     const btn = document.getElementById('submitBtn');
-    const originalText = btn.textContent;
     btn.textContent = "PROCESSING...";
     btn.disabled = true;
 
     try {
+        // 1. STORE EMAIL
+        const email = document.getElementById('email').value;
+
+        // 2. STORE USER PROFILE (Survey Data)
         const surveyData = {
+            email: email, // Stored here
             year: document.getElementById('studentYear').value,
-            major: document.getElementById('major').value
+            major: document.getElementById('major').value,
+            second_concentration: document.getElementById('second_concentration').value,
+            minor: document.getElementById('minor').value
         };
 
         const preferences = {
@@ -90,15 +156,33 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
             weekendEnd: getPickerValue('weekendEnd')
         };
 
+        // 3. STORE ASSIGNMENTS (Task Queue)
         const courses = [];
         document.querySelectorAll('.syllabus-row').forEach(row => {
-            const name = row.querySelector('.assign-name').value;
-            const type = row.querySelector('.assign-type').value;
-            const date = row.querySelector('.assign-date').value;
-            if (name && type && date) courses.push({ name, type, date });
+            // Collecting inputs from the specific row
+            const item = {
+                assignment_name: row.querySelector('.a-name').value,
+                due_date: row.querySelector('.a-date').value,
+                work_sessions: parseInt(row.querySelector('.a-sessions').value) || 1,
+                
+                assignment_type: row.querySelector('.a-type').value,
+                field_of_study: row.querySelector('.a-field').value,
+                external_resources: row.querySelector('.a-resource').value,
+                work_location: row.querySelector('.a-location').value,
+                
+                // Convert Checkbox to Yes/No string if backend prefers, or boolean
+                work_in_group: row.querySelector('.a-group').checked ? "Yes" : "No",
+                submitted_in_person: row.querySelector('.a-person').checked ? "Yes" : "No"
+            };
+
+            // Only add if basic fields are present
+            if (item.assignment_name && item.due_date) {
+                courses.push(item);
+            }
         });
 
         const formData = new FormData();
+        // This 'data' string is what python parses
         formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
         const pdfInput = document.getElementById('pdfUpload');
@@ -124,18 +208,6 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
                 downloadLink.download = "My_Study_Schedule.ics";
                 resultArea.scrollIntoView({ behavior: 'smooth' });
             }
-            if (result.courses) {
-                const rows = document.querySelectorAll('.syllabus-row');
-                rows.forEach((row, index) => {
-                    if (result.courses[index]) {
-                        const tag = row.querySelector('.prediction-tag');
-                        if (tag) {
-                            tag.style.display = 'block';
-                            tag.textContent = `${result.courses[index].predicted_hours}h`;
-                        }
-                    }
-                });
-            }
         } else {
             alert("Error: " + (result.error || "Unknown"));
         }
@@ -143,6 +215,6 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         console.error(e);
         alert("Request failed. See console.");
     } finally {
-        setTimeout(() => { btn.disabled = false; btn.textContent = originalText; }, 2000);
+        setTimeout(() => { btn.disabled = false; btn.textContent = "Initialize Optimization"; }, 2000);
     }
 });
