@@ -45,15 +45,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LOCAL_TZ = ZoneInfo("America/New_York")
 CHUNK_SIZE = 60
 
-# --- PREDICTIVE MODEL ---
-# Access the fitted model and columns directly from the module
-model = predictive_model.model
-
-# Verification Log
-if model:
-    print("✅ Index.py: Predictive model loaded and ready.")
-else:
-    print("❌ Index.py: Predictive model failed to load (check survey.csv).")
 
 # ==========================================
 # ROUTES
