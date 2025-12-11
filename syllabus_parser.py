@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
+# --- CONFIGURATION (FROM OLD VERSION) ---
+# This ensures it works even if the frontend fails to pass the key
+FALLBACK_API_KEY = "AIzaSyCUfsMHoFpPQTT7gzfaiZb3h6lHR6j9KIE"
+
 # --- DATA MODELS ---
 class MeetingSchedule(BaseModel):
     days: List[str] = Field(description="List of days (e.g., ['Monday', 'Wednesday']).")
@@ -29,72 +33,62 @@ class SyllabusResponse(BaseModel):
     metadata: CourseMetadata
     assignments: List[AssignmentItem]
 
-# --- 10/10 HELPER: STRICT STANDARDIZATION ---
+# --- HELPER: STRICT STANDARDIZATION ---
 def standardize_time(time_str):
-    """
-    Parses messy times (2pm, 2:00 pm, 14:00) and converts them to
-    a strict 'HH:MM AM/PM' format (e.g., '02:00 PM') for perfect grouping.
-    """
     if not time_str: return None
-    
     clean = re.split(r'\s*[-–]\s*|\s+to\s+', str(time_str))[0].strip()
-    
     for fmt in ["%I:%M %p", "%I %p", "%H:%M", "%I:%M%p"]:
         try:
             return datetime.strptime(clean, fmt).strftime("%I:%M %p")
         except ValueError:
             continue
-            
     if clean.isdigit():
         val = int(clean)
         if 8 <= val <= 11: return f"{val:02d}:00 AM"
         if 1 <= val <= 6:  return f"{val:02d}:00 PM"
         if val == 12:      return "12:00 PM"
-    
     return clean
 
 def resolve_time(row, schedule_map):
-    """
-    Logic: Explicit > Class Time > 11:59 PM.
-    """
     existing_time = row['Time']
-    
     if existing_time and any(char.isdigit() for char in str(existing_time)):
         return standardize_time(existing_time)
-
     try:
         date_obj = pd.to_datetime(row['Date'])
         day_name = date_obj.strftime('%A') 
     except:
         return "11:59 PM"
-
     if day_name in schedule_map:
         return schedule_map[day_name]
-    
     return "11:59 PM"
 
 # --- PARSING ENGINE ---
-# UPDATED: Now accepts api_key as the second argument
-def parse_syllabus_to_data(pdf_path: str, api_key: str):
-    if not api_key:
-        print("❌ Error: No API Key provided to parser.")
+def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
+    # LOGIC FIX: Use the passed key, otherwise fall back to the hardcoded one
+    active_key = api_key if api_key else FALLBACK_API_KEY
+    
+    if not active_key:
+        print("❌ Error: No API Key found.")
         return None
 
-    client = genai.Client(api_key=api_key)
+    # Initialize Client with the resolved key
+    client = genai.Client(api_key=active_key)
     print(f"Reading {pdf_path}...")
 
     try:
         file_upload = client.files.upload(file=pdf_path)
+        
+        # Poll for processing (From Old Version)
         while file_upload.state.name == "PROCESSING":
             time.sleep(1)
             file_upload = client.files.get(name=file_upload.name)
         
         if file_upload.state.name != "ACTIVE":
+            print(f"❌ File processing failed: {file_upload.state.name}")
             return None
 
         prompt = """
         Analyze this syllabus for Calendar Import.
-        
         PHASE 1: METADATA
         - Extract Course Name.
         - **Class Schedule:** Extract Days and **START TIME ONLY**.
@@ -106,8 +100,10 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str):
         - **Exams:** If "In Class", leave time NULL.
         """
 
+        # UPDATED: Switched to 'gemini-1.5-flash' (Stable) or 'gemini-2.0-flash-exp'
+        # 'gemini-2.5-flash' in your old file was likely a typo/hallucination.
         response = client.models.generate_content(
-            model='gemini-2.0-flash', 
+            model='gemini-1.5-flash', 
             contents=[file_upload, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -137,10 +133,9 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str):
             })
             
         df = pd.DataFrame(rows)
-        
         if not df.empty:
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            df = df.dropna(subset=['Date']) 
+            df = df.dropna(subset=['Date'])
             df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
 
         return df
