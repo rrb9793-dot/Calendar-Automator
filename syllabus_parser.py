@@ -8,10 +8,6 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
-# --- CONFIGURATION ---
-# Reads directly from Railway Environment Variables
-API_KEY = os.environ.get("GEMINI_API_KEY")
-
 # --- DATA MODELS ---
 class MeetingSchedule(BaseModel):
     days: List[str] = Field(description="List of days (e.g., ['Monday', 'Wednesday']).")
@@ -41,24 +37,21 @@ def standardize_time(time_str):
     """
     if not time_str: return None
     
-    # Clean up input (remove ranges like -3:15)
     clean = re.split(r'\s*[-–]\s*|\s+to\s+', str(time_str))[0].strip()
     
-    # Try multiple formats
     for fmt in ["%I:%M %p", "%I %p", "%H:%M", "%I:%M%p"]:
         try:
             return datetime.strptime(clean, fmt).strftime("%I:%M %p")
         except ValueError:
             continue
             
-    # Fallback heuristics for raw numbers
     if clean.isdigit():
         val = int(clean)
         if 8 <= val <= 11: return f"{val:02d}:00 AM"
         if 1 <= val <= 6:  return f"{val:02d}:00 PM"
         if val == 12:      return "12:00 PM"
     
-    return clean # Return original if we really can't parse it
+    return clean
 
 def resolve_time(row, schedule_map):
     """
@@ -66,13 +59,10 @@ def resolve_time(row, schedule_map):
     """
     existing_time = row['Time']
     
-    # 1. Explicit Deadline
     if existing_time and any(char.isdigit() for char in str(existing_time)):
         return standardize_time(existing_time)
 
-    # 2. Check Class Day
     try:
-        # Use pandas to handle date parsing robustly
         date_obj = pd.to_datetime(row['Date'])
         day_name = date_obj.strftime('%A') 
     except:
@@ -81,16 +71,16 @@ def resolve_time(row, schedule_map):
     if day_name in schedule_map:
         return schedule_map[day_name]
     
-    # 3. Fallback
     return "11:59 PM"
 
 # --- PARSING ENGINE ---
-def parse_syllabus_to_data(pdf_path: str):
-    if not API_KEY:
-        print("❌ Error: GEMINI_API_KEY not found in environment variables.")
+# UPDATED: Now accepts api_key as the second argument
+def parse_syllabus_to_data(pdf_path: str, api_key: str):
+    if not api_key:
+        print("❌ Error: No API Key provided to parser.")
         return None
 
-    client = genai.Client(api_key=API_KEY)
+    client = genai.Client(api_key=api_key)
     print(f"Reading {pdf_path}...")
 
     try:
@@ -127,7 +117,6 @@ def parse_syllabus_to_data(pdf_path: str):
         
         data: SyllabusResponse = response.parsed
         
-        # Build Schedule Map with STANDARDIZED times
         schedule_map = {}
         for meeting in data.metadata.class_meetings:
             std_time = standardize_time(meeting.start_time)
@@ -150,11 +139,8 @@ def parse_syllabus_to_data(pdf_path: str):
         df = pd.DataFrame(rows)
         
         if not df.empty:
-            # Force Dates to be standard strings to prevent duplicates
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            df = df.dropna(subset=['Date']) # Drop rows where date failed parse
-            
-            # Apply Time Logic
+            df = df.dropna(subset=['Date']) 
             df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
 
         return df
@@ -172,7 +158,6 @@ def consolidate_assignments(df):
     def merge_text(series):
         items = [s for s in series if s]
         if not items: return ""
-        # Remove duplicates while preserving order
         unique_items = []
         seen = set()
         for x in items:
@@ -192,7 +177,6 @@ def consolidate_assignments(df):
         return "\n".join(clean_items)
 
     def merge_names(series):
-        # Unique names only
         return " / ".join(sorted(set(series)))
 
     df_consolidated = df.groupby(group_cols).agg({
