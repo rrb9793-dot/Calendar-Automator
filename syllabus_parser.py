@@ -5,34 +5,16 @@ import re
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from google import genai
-from google.genai import types
+import google.generativeai as genai  # <-- USING STABLE SDK
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # --- CONFIGURATION ---
-# CRITICAL: DO NOT HARDCODE THE KEY HERE. IT WILL LEAK AGAIN.
-# We now fetch it securely from the Environment Variable.
-FALLBACK_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Fetch key safely from environment
+API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # --- DATA MODELS ---
-class MeetingSchedule(BaseModel):
-    days: List[str] = Field(description="List of days (e.g., ['Monday', 'Wednesday']).")
-    start_time: str = Field(description="The START time of the class ONLY (e.g. '11:00 AM').")
-
-class AssignmentItem(BaseModel):
-    date: str = Field(description="The due date in 'YYYY-MM-DD' format.")
-    time: Optional[str] = Field(description="Specific deadline if explicitly written (e.g. '11:59 PM'). Otherwise null.")
-    assignment_name: str = Field(description="Concise name.")
-    category: str = Field(description="Category: 'Reading', 'Writing', 'Exam', 'Project', 'Presentation', 'Other'.")
-    description: str = Field(description="Details. If exam, include duration here. If readings, bullet points.")
-
-class CourseMetadata(BaseModel):
-    course_name: str = Field(description="Name of the course.")
-    semester_year: str = Field(description="Semester and Year (e.g., 'Fall 2025').")
-    class_meetings: List[MeetingSchedule] = Field(description="The weekly schedule.")
-
-class SyllabusResponse(BaseModel):
-    metadata: CourseMetadata
-    assignments: List[AssignmentItem]
+# (Pydantic models are used for structure, but we'll parse JSON manually/via helper 
+# to ensure compatibility with the stable SDK's JSON mode)
 
 # --- HELPER: STRICT STANDARDIZATION ---
 def standardize_time(time_str):
@@ -65,97 +47,104 @@ def resolve_time(row, schedule_map):
 
 # --- PARSING ENGINE ---
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
-    # Priority: Passed key -> Env Var -> Fallback (which is now Env Var)
-    active_key = api_key if api_key else FALLBACK_API_KEY
-    
+    # Resolve Key
+    active_key = api_key if api_key else API_KEY
     if not active_key:
         print("❌ Error: No API Key found. Set GEMINI_API_KEY in Railway Variables.")
         return None
 
-    client = genai.Client(api_key=active_key)
+    # Configure the Stable SDK
+    genai.configure(api_key=active_key)
     print(f"Reading {pdf_path}...")
 
     try:
-        file_upload = client.files.upload(file=pdf_path)
+        # Upload File using the File API
+        sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
         
-        while file_upload.state.name == "PROCESSING":
+        # Wait for processing
+        while sample_file.state.name == "PROCESSING":
             time.sleep(1)
-            file_upload = client.files.get(name=file_upload.name)
-        
-        if file_upload.state.name != "ACTIVE":
-            print(f"❌ File processing failed: {file_upload.state.name}")
+            sample_file = genai.get_file(sample_file.name)
+            
+        if sample_file.state.name != "ACTIVE":
+            print(f"❌ File processing failed: {sample_file.state.name}")
             return None
 
+        # Define the Prompt
         prompt = """
-        Analyze this syllabus for Calendar Import.
-        PHASE 1: METADATA
-        - Extract Course Name.
-        - **Class Schedule:** Extract Days and **START TIME ONLY**.
+        Extract syllabus data into JSON format.
         
-        PHASE 2: ASSIGNMENTS
-        - Extract deliverables and readings.
-        - **Dates:** YYYY-MM-DD.
-        - **Times:** Leave time NULL unless a specific deadline is written.
-        - **Exams:** If "In Class", leave time NULL.
+        Structure:
+        {
+            "metadata": {
+                "course_name": "string",
+                "class_meetings": [
+                    {"days": ["Monday"], "start_time": "11:00 AM"}
+                ]
+            },
+            "assignments": [
+                {
+                    "date": "YYYY-MM-DD",
+                    "time": "11:59 PM", 
+                    "assignment_name": "string",
+                    "category": "Exam/Reading/Project/Other",
+                    "description": "string"
+                }
+            ]
+        }
+        
+        Rules:
+        - Dates must be YYYY-MM-DD.
+        - If no time is listed, use null.
+        - Capture all exams and due dates.
         """
 
-        # --- RETRY LOGIC (Updated to SAFE Model) ---
-        # gemini-1.5-flash is the standard alias. It is safer than -002 for now.
-        models_to_try = ['gemini-1.5-flash'] 
-        response = None
-        success = False
+        # Choose Model - 'gemini-1.5-flash' is the stable alias here
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
-        for model_name in models_to_try:
-            if success: break
-            
-            print(f"🤖 Attempting with model: {model_name}...")
-            
-            for attempt in range(3):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name, 
-                        contents=[file_upload, prompt],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=SyllabusResponse
-                        )
-                    )
-                    success = True
-                    break 
-                except Exception as e:
-                    is_overloaded = "503" in str(e) or "overloaded" in str(e).lower()
-                    if is_overloaded and attempt < 2:
-                        wait = (attempt + 1) * 2
-                        print(f"⚠️ {model_name} overloaded. Retrying in {wait}s...")
-                        time.sleep(wait)
-                        continue
-                    else:
-                        print(f"❌ Failed with {model_name}: {e}")
-                        break 
-
-        if not success or not response:
-            print("❌ All models failed.")
+        # Generate content with JSON enforcement
+        response = model.generate_content(
+            [sample_file, prompt],
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        # Parse the JSON response
+        import json
+        try:
+            data = json.loads(response.text)
+        except Exception as e:
+            print(f"❌ JSON Parse Error: {e}")
             return None
 
-        data: SyllabusResponse = response.parsed
+        # --- Process Metadata ---
+        meta = data.get("metadata", {})
+        course_name = meta.get("course_name", "Unknown Course")
+        meetings = meta.get("class_meetings", [])
         
         schedule_map = {}
-        for meeting in data.metadata.class_meetings:
-            std_time = standardize_time(meeting.start_time)
-            for day in meeting.days:
+        for meeting in meetings:
+            # Handle if start_time is missing
+            raw_time = meeting.get("start_time", "")
+            std_time = standardize_time(raw_time)
+            
+            days = meeting.get("days", [])
+            if isinstance(days, str): days = [days] # Handle single string case
+            
+            for day in days:
                 for full_day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
-                    if full_day.lower() in day.lower():
+                    if full_day.lower() in str(day).lower():
                         schedule_map[full_day] = std_time
 
+        # --- Process Assignments ---
         rows = []
-        for item in data.assignments:
+        for item in data.get("assignments", []):
             rows.append({
-                "Course": data.metadata.course_name,
-                "Date": item.date,
-                "Time": item.time, 
-                "Category": item.category,
-                "Assignment": item.assignment_name,
-                "Description": item.description
+                "Course": course_name,
+                "Date": item.get("date"),
+                "Time": item.get("time"), 
+                "Category": item.get("category", "Other"),
+                "Assignment": item.get("assignment_name", "Untitled"),
+                "Description": item.get("description", "")
             })
             
         df = pd.DataFrame(rows)
@@ -185,17 +174,8 @@ def consolidate_assignments(df):
             if x not in seen:
                 unique_items.append(x)
                 seen.add(x)
-        
         if len(unique_items) == 1: return unique_items[0]
-        
-        clean_items = []
-        for x in unique_items:
-            x = x.strip()
-            if x.startswith("•") or x.startswith("-"):
-                clean_items.append(x)
-            else:
-                clean_items.append(f"• {x}")
-        return "\n".join(clean_items)
+        return " / ".join(unique_items)
 
     def merge_names(series):
         return " / ".join(sorted(set(series)))
