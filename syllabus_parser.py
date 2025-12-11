@@ -9,7 +9,9 @@ from google import genai
 from google.genai import types
 
 # --- CONFIGURATION ---
-FALLBACK_API_KEY = "AIzaSyCUfsMHoFpPQTT7gzfaiZb3h6lHR6j9KIE"
+# CRITICAL: DO NOT HARDCODE THE KEY HERE. IT WILL LEAK AGAIN.
+# We now fetch it securely from the Environment Variable.
+FALLBACK_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # --- DATA MODELS ---
 class MeetingSchedule(BaseModel):
@@ -63,10 +65,11 @@ def resolve_time(row, schedule_map):
 
 # --- PARSING ENGINE ---
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
+    # Priority: Passed key -> Env Var -> Fallback (which is now Env Var)
     active_key = api_key if api_key else FALLBACK_API_KEY
     
     if not active_key:
-        print("❌ Error: No API Key found.")
+        print("❌ Error: No API Key found. Set GEMINI_API_KEY in Railway Variables.")
         return None
 
     client = genai.Client(api_key=active_key)
@@ -96,12 +99,9 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - **Exams:** If "In Class", leave time NULL.
         """
 
-        # --- RETRY & FALLBACK LOGIC ---
-        # 1. Try your preferred model (2.5)
-        # 2. If it fails (503/Overloaded), wait and retry.
-        # 3. If it STILL fails, use the stable model (1.5).
-        
-        models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash-002']
+        # --- RETRY LOGIC (Updated to SAFE Model) ---
+        # gemini-1.5-flash is the standard alias. It is safer than -002 for now.
+        models_to_try = ['gemini-1.5-flash'] 
         response = None
         success = False
 
@@ -110,7 +110,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
             
             print(f"🤖 Attempting with model: {model_name}...")
             
-            # Try up to 3 times per model
             for attempt in range(3):
                 try:
                     response = client.models.generate_content(
@@ -122,7 +121,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                         )
                     )
                     success = True
-                    break # Success! Break inner loop
+                    break 
                 except Exception as e:
                     is_overloaded = "503" in str(e) or "overloaded" in str(e).lower()
                     if is_overloaded and attempt < 2:
@@ -132,7 +131,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                         continue
                     else:
                         print(f"❌ Failed with {model_name}: {e}")
-                        break # Break inner loop, move to next model
+                        break 
 
         if not success or not response:
             print("❌ All models failed.")
