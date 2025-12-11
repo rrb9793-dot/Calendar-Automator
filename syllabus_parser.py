@@ -92,8 +92,9 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - Capture all exams and due dates.
         """
 
-        # UPDATED: Use the concrete version number to prevent 404s
-        model = genai.GenerativeModel('gemini-1.5-flash-001')
+        # --- UPDATED MODEL HERE ---
+        # Changed from 'gemini-1.5-flash-001' to 'gemini-2.0-flash'
+        model = genai.GenerativeModel('gemini-2.0-flash')
 
         response = model.generate_content(
             [sample_file, prompt],
