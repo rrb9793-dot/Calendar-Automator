@@ -9,7 +9,6 @@ from google import genai
 from google.genai import types
 
 # --- CONFIGURATION ---
-# Fallback key if not passed by frontend
 FALLBACK_API_KEY = "AIzaSyCUfsMHoFpPQTT7gzfaiZb3h6lHR6j9KIE"
 
 # --- DATA MODELS ---
@@ -64,7 +63,6 @@ def resolve_time(row, schedule_map):
 
 # --- PARSING ENGINE ---
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
-    # Use passed key, or fallback
     active_key = api_key if api_key else FALLBACK_API_KEY
     
     if not active_key:
@@ -77,6 +75,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
     try:
         file_upload = client.files.upload(file=pdf_path)
         
+        # Wait for file processing
         while file_upload.state.name == "PROCESSING":
             time.sleep(1)
             file_upload = client.files.get(name=file_upload.name)
@@ -98,16 +97,33 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - **Exams:** If "In Class", leave time NULL.
         """
 
-        # --- UPDATED TO YOUR REQUESTED MODEL ---
-        response = client.models.generate_content(
-            model='gemini-2.5-flash', 
-            contents=[file_upload, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=SyllabusResponse
-            )
-        )
+        # --- RETRY LOGIC FOR 503 OVERLOAD ---
+        max_retries = 3
+        response = None
         
+        for attempt in range(max_retries):
+            try:
+                # Using your requested model
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash', 
+                    contents=[file_upload, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=SyllabusResponse
+                    )
+                )
+                break # Success! Exit loop
+            except Exception as e:
+                # Check for "Overloaded" or "503"
+                if "503" in str(e) or "overloaded" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2 # Wait 2s, then 4s...
+                        print(f"⚠️ Model overloaded. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                # If it's not a 503, or we ran out of retries, raise the error
+                raise e
+
         data: SyllabusResponse = response.parsed
         
         schedule_map = {}
