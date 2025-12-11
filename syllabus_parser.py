@@ -75,7 +75,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
     try:
         file_upload = client.files.upload(file=pdf_path)
         
-        # Wait for file processing
         while file_upload.state.name == "PROCESSING":
             time.sleep(1)
             file_upload = client.files.get(name=file_upload.name)
@@ -97,32 +96,47 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - **Exams:** If "In Class", leave time NULL.
         """
 
-        # --- RETRY LOGIC FOR 503 OVERLOAD ---
-        max_retries = 3
-        response = None
+        # --- RETRY & FALLBACK LOGIC ---
+        # 1. Try your preferred model (2.5)
+        # 2. If it fails (503/Overloaded), wait and retry.
+        # 3. If it STILL fails, use the stable model (1.5).
         
-        for attempt in range(max_retries):
-            try:
-                # Using your requested model
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash', 
-                    contents=[file_upload, prompt],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=SyllabusResponse
+        models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash-002']
+        response = None
+        success = False
+
+        for model_name in models_to_try:
+            if success: break
+            
+            print(f"🤖 Attempting with model: {model_name}...")
+            
+            # Try up to 3 times per model
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name, 
+                        contents=[file_upload, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=SyllabusResponse
+                        )
                     )
-                )
-                break # Success! Exit loop
-            except Exception as e:
-                # Check for "Overloaded" or "503"
-                if "503" in str(e) or "overloaded" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 2 # Wait 2s, then 4s...
-                        print(f"⚠️ Model overloaded. Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
+                    success = True
+                    break # Success! Break inner loop
+                except Exception as e:
+                    is_overloaded = "503" in str(e) or "overloaded" in str(e).lower()
+                    if is_overloaded and attempt < 2:
+                        wait = (attempt + 1) * 2
+                        print(f"⚠️ {model_name} overloaded. Retrying in {wait}s...")
+                        time.sleep(wait)
                         continue
-                # If it's not a 503, or we ran out of retries, raise the error
-                raise e
+                    else:
+                        print(f"❌ Failed with {model_name}: {e}")
+                        break # Break inner loop, move to next model
+
+        if not success or not response:
+            print("❌ All models failed.")
+            return None
 
         data: SyllabusResponse = response.parsed
         
