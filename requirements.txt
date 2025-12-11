@@ -2,7 +2,7 @@ Flask
 flask-cors
 pandas
 scikit-learn
-google-genai
+google-generativeai
 pydantic
 gunicorn
 werkzeug
