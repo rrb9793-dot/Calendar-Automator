@@ -5,16 +5,11 @@ import re
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-import google.generativeai as genai  # <-- USING STABLE SDK
+import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # --- CONFIGURATION ---
-# Fetch key safely from environment
 API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# --- DATA MODELS ---
-# (Pydantic models are used for structure, but we'll parse JSON manually/via helper 
-# to ensure compatibility with the stable SDK's JSON mode)
 
 # --- HELPER: STRICT STANDARDIZATION ---
 def standardize_time(time_str):
@@ -58,10 +53,9 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
     print(f"Reading {pdf_path}...")
 
     try:
-        # Upload File using the File API
+        # Upload File
         sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
         
-        # Wait for processing
         while sample_file.state.name == "PROCESSING":
             time.sleep(1)
             sample_file = genai.get_file(sample_file.name)
@@ -70,7 +64,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
             print(f"❌ File processing failed: {sample_file.state.name}")
             return None
 
-        # Define the Prompt
         prompt = """
         Extract syllabus data into JSON format.
         
@@ -99,16 +92,14 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - Capture all exams and due dates.
         """
 
-        # Choose Model - 'gemini-1.5-flash' is the stable alias here
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # UPDATED: Use the concrete version number to prevent 404s
+        model = genai.GenerativeModel('gemini-1.5-flash-001')
 
-        # Generate content with JSON enforcement
         response = model.generate_content(
             [sample_file, prompt],
             generation_config={"response_mime_type": "application/json"}
         )
         
-        # Parse the JSON response
         import json
         try:
             data = json.loads(response.text)
@@ -123,12 +114,11 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         
         schedule_map = {}
         for meeting in meetings:
-            # Handle if start_time is missing
             raw_time = meeting.get("start_time", "")
             std_time = standardize_time(raw_time)
             
             days = meeting.get("days", [])
-            if isinstance(days, str): days = [days] # Handle single string case
+            if isinstance(days, str): days = [days] 
             
             for day in days:
                 for full_day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
