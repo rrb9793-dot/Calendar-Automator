@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
-# --- CONFIGURATION (FROM OLD VERSION) ---
-# This ensures it works even if the frontend fails to pass the key
+# --- CONFIGURATION ---
+# Fallback key if not passed by frontend
 FALLBACK_API_KEY = "AIzaSyCUfsMHoFpPQTT7gzfaiZb3h6lHR6j9KIE"
 
 # --- DATA MODELS ---
@@ -64,21 +64,19 @@ def resolve_time(row, schedule_map):
 
 # --- PARSING ENGINE ---
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
-    # LOGIC FIX: Use the passed key, otherwise fall back to the hardcoded one
+    # Use passed key, or fallback
     active_key = api_key if api_key else FALLBACK_API_KEY
     
     if not active_key:
         print("❌ Error: No API Key found.")
         return None
 
-    # Initialize Client with the resolved key
     client = genai.Client(api_key=active_key)
     print(f"Reading {pdf_path}...")
 
     try:
         file_upload = client.files.upload(file=pdf_path)
         
-        # Poll for processing (From Old Version)
         while file_upload.state.name == "PROCESSING":
             time.sleep(1)
             file_upload = client.files.get(name=file_upload.name)
@@ -100,10 +98,9 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - **Exams:** If "In Class", leave time NULL.
         """
 
-        # UPDATED: Switched to 'gemini-1.5-flash' (Stable) or 'gemini-2.0-flash-exp'
-        # 'gemini-2.5-flash' in your old file was likely a typo/hallucination.
+        # --- UPDATED TO YOUR REQUESTED MODEL ---
         response = client.models.generate_content(
-            model='gemini-1.5-flash', 
+            model='gemini-2.5-flash', 
             contents=[file_upload, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
