@@ -56,16 +56,20 @@ def generate_schedule():
 
         # B. User ICS Files
         ics_files_bytes = []
-        if 'ics' in request.files and request.files['ics'].filename != '':
-            ics_file = request.files['ics']
-            ics_files_bytes.append(ics_file.read())
-            ics_file.seek(0) 
+        if 'ics' in request.files:
+            # Handle multiple files or single file under key 'ics'
+            files = request.files.getlist('ics')
+            for f in files:
+                if f.filename != '':
+                    ics_files_bytes.append(f.read())
+                    f.seek(0)
 
         # ---------------------------------------------------------
         # 2. PDF PARSING
         # ---------------------------------------------------------
         assignments_list = []
         uploaded_pdfs = request.files.getlist('pdfs')
+        
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
             pdf_dfs = []
@@ -75,12 +79,14 @@ def generate_schedule():
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
-                # Parse
+                # Parse using the new parser code
+                # Passes GEMINI_API_KEY from env, or parser falls back to hardcoded one
                 df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                
                 if df is not None and not df.empty:
                     pdf_dfs.append(df)
             
-            # Consolidate
+            # Consolidate all parsed dataframes
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
                 final_df = syllabus_parser.consolidate_assignments(master_df)
@@ -90,6 +96,7 @@ def generate_schedule():
         # ---------------------------------------------------------
         # 3. PREPARE & RUN CALENDAR MAKER
         # ---------------------------------------------------------
+        # Set default hours if frontend keys are missing
         backend_preferences = {
             "timezone": "America/New_York",
             "work_windows": {
@@ -102,11 +109,22 @@ def generate_schedule():
 
         formatted_assignments = []
         for i, item in enumerate(assignments_list):
+            # --- DATE/TIME FIX APPLIED HERE ---
+            date_str = item.get("Date")
+            time_str = item.get("Time")
+            
+            # Default to 11:59 PM if parser returned None for time
+            if not time_str:
+                time_str = "11:59 PM"
+            
+            # Combine them so calendar_maker gets a full timestamp
+            full_due_string = f"{date_str} {time_str}"
+            
             formatted_assignments.append({
                 "id": f"assign_{i}",
                 "name": item.get("Assignment", "Untitled Task"),
                 "class_name": item.get("Course", "General"),
-                "due_date": item.get("Date"), 
+                "due_date": full_due_string, 
                 "time_estimate": 2.0, 
                 "assignment_type": item.get("Category", "p_set")
             })
@@ -133,6 +151,9 @@ def generate_schedule():
 
     except Exception as e:
         print(f"API Error: {e}")
+        # Helpful for debugging: print the full traceback in logs if needed
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
