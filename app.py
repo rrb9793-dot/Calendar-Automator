@@ -85,14 +85,20 @@ def generate_schedule():
         # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries
+        # A. Manual Entries [UPDATED NAMING CONVENTION]
         for course in manual_courses:
+            assign_name = course.get('assignment_name', 'Untitled')
+            course_field = course.get('field_of_study', 'General')
+            
+            # Append Course Name here to match Parser style
+            final_name = f"{assign_name} ({course_field})"
+
             all_assignments.append({
                 "source_type": "manual",
-                "Assignment": course.get('assignment_name'),
+                "Assignment": final_name, 
                 "Date": course.get('due_date'),
                 "Time": "23:59", 
-                "Course": course.get('field_of_study', 'General'),
+                "Course": course_field,
                 "raw_details": course 
             })
 
@@ -114,18 +120,18 @@ def generate_schedule():
                 pdf.save(path)
                 
                 try:
-                    # CALLING PARSER WITH MANUAL NAME
+                    # Parser will now append (Course Name) automatically
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     time.sleep(2) 
                 except TypeError as te:
-                    # FALLBACK: If syllabus_parser isn't updated yet, try without the name
                     print(f"Warning: syllabus_parser outdated. {te}")
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                     if df is not None and not df.empty:
-                        # Manually set the course name since the parser couldn't
                         df['Course'] = course_name
+                        # Fallback append if parser is old
+                        df['Assignment'] = df['Assignment'] + f" ({course_name})"
                         pdf_dfs.append(df)
                 except ResourceExhausted:
                     return jsonify({'error': 'Google AI Quota Exceeded. Please wait.'}), 429
@@ -170,6 +176,7 @@ def generate_schedule():
             
             formatted_assignments.append({
                 "id": f"assign_{i}",
+                # The name here already has the course appended!
                 "name": item.get("Assignment", "Untitled Task"),
                 "class_name": item.get("Course", "General"),
                 "due_date": full_due_string, 
