@@ -125,6 +125,34 @@ select:focus, input:focus { outline: none; border-color: var(--retro-ink); }
     cursor: pointer; text-decoration: underline; padding: 0;
 }
 
+/* --- NEW: PREDICTION RESULTS STYLING --- */
+.prediction-container {
+    margin: 20px 0;
+    text-align: left;
+    background: var(--retro-bg);
+    border: 1px dashed var(--grid-line);
+    padding: 15px;
+    border-radius: 4px;
+}
+.prediction-header h5 {
+    margin: 0 0 10px 0;
+    font-family: var(--font-header);
+    text-transform: uppercase;
+    font-size: 0.9rem;
+    border-bottom: 2px solid var(--retro-ink);
+    padding-bottom: 5px;
+}
+.prediction-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px dotted var(--grid-line);
+    font-size: 0.95rem;
+}
+.prediction-row:last-child { border-bottom: none; }
+.prediction-row .p-name { font-weight: bold; }
+.prediction-row .p-time { font-family: var(--font-header); color: var(--accent-primary); }
+
 @media (max-width: 700px) {
     .grid-2, .schedule-grid, .syllabus-row { grid-template-columns: 1fr !important; }
     .span-2, .span-4 { grid-column: span 1; }
