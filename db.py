@@ -21,14 +21,14 @@ def get_user_preferences(email):
     if not conn: return None
     try:
         cur = conn.cursor()
-        # Fetching the user's saved settings
+        # UPDATED: Case-insensitive search
         query = """
             SELECT year, timezone, major, second_concentration, minor,
                    weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
             FROM user_preferences
-            WHERE email = %s;
+            WHERE LOWER(email) = LOWER(%s);
         """
-        cur.execute(query, (email,))
+        cur.execute(query, (email.strip(),))
         row = cur.fetchone()
         cur.close()
         conn.close()
