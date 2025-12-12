@@ -12,7 +12,7 @@ from google.api_core.exceptions import ResourceExhausted
 import predictive_model 
 import syllabus_parser 
 import calendar_maker
-import db  # <--- Loads our updated db.py
+import db  # <--- Loads our new db.py
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,21 +43,6 @@ def home():
 def download_file(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
 
-# --- NEW ROUTE: AUTOFILL ---
-@app.route('/api/get-user-preferences', methods=['GET'])
-def get_user_preferences_route():
-    email = request.args.get('email')
-    if not email:
-        return jsonify({}), 400
-    
-    # Fetch from DB
-    data = db.get_user_preferences(email)
-    
-    if data:
-        return jsonify(data)
-    else:
-        return jsonify({}), 404
-
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
@@ -73,6 +58,7 @@ def generate_schedule():
 
         # --- [STEP 1] SAVE USER PREFERENCES TO DB ---
         if survey_data.get('email'):
+            # Using the correct function for your 'user_preferences' table
             db.save_user_preferences(survey_data, frontend_prefs)
         else:
             print("⚠️ Skipping preferences save (No email provided)")
@@ -103,32 +89,27 @@ def generate_schedule():
             })
 
         # B. PDF Entries (From Parsing with GEMINI)
-        pdf_count = int(request.form.get('pdf_count', 0))
-        
-        if pdf_count > 0:
-            print(f"Processing {pdf_count} PDF(s)...")
+        uploaded_pdfs = request.files.getlist('pdfs')
+        if uploaded_pdfs:
+            print(f"Processing {len(uploaded_pdfs)} PDF(s) with Gemini...")
             pdf_dfs = []
-            
-            for i in range(pdf_count):
-                pdf = request.files.get(f'pdf_{i}')
-                course_name = request.form.get(f'course_name_{i}', 'Unknown Course') # Get the manual name
-                
-                if not pdf or pdf.filename == '': continue
-                
+            for pdf in uploaded_pdfs:
+                if pdf.filename == '': continue
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
                 try:
-                    # PASS THE MANUAL NAME HERE
-                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
+                    # --- GEMINI PARSING LOGIC ---
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     
+                    # Wait 2 seconds between files to avoid hitting the free tier limit
                     time.sleep(2) 
-                # ... (keep existing exception handling) ...
 
                 except ResourceExhausted:
+                    # If Google says "Stop", we return a 429 error gracefully
                     print(f"❌ Quota Exceeded on file: {filename}")
                     return jsonify({
                         'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
