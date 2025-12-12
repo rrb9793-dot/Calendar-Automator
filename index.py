@@ -36,6 +36,15 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 @app.route('/', methods=['GET'])
 def home():
+    print("--- CHECKING AVAILABLE GEMINI MODELS ---")
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f"Found model: {m.name}")
+    except Exception as e:
+        print(f"Error listing models: {e}")
+    print("----------------------------------------")
+    # --- DEBUGGING END ---
     return render_template('mains.html')
 
 @app.route('/download/<filename>')
