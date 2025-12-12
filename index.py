@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
-from openai import RateLimitError
+from google.api_core.exceptions import ResourceExhausted
 
 # --- CUSTOM MODULES ---
 import predictive_model 
@@ -96,17 +96,34 @@ def generate_schedule():
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
+                
                 try:
-                    df = syllabus_parser.parse_syllabus_to_data(path, OPENAI_API_KEY)
+                    # Try to parse the PDF
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
-                    time.sleep(1) 
-                except RateLimitError:
-                    print(f"❌ OpenAI Rate Limit Hit on file: {filename}")
-                    return jsonify({'error': 'OpenAI Rate Limit Exceeded.'}), 429
+                    
+                    # Wait 2 seconds between files to avoid hitting the free tier limit
+                    time.sleep(2) 
+
+                except ResourceExhausted:
+                    # If Google says "Stop", we return a 429 error gracefully
+                    print(f"❌ Quota Exceeded on file: {filename}")
+                    return jsonify({
+                        'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
+                    }), 429
                 except Exception as e:
                     print(f"❌ Error processing {filename}: {e}")
                     continue
+            
+            if pdf_dfs:
+                master_df = pd.concat(pdf_dfs, ignore_index=True)
+                final_df = syllabus_parser.consolidate_assignments(master_df)
+                parsed_records = final_df.to_dict(orient='records')
+                
+                for record in parsed_records:
+                    record["source_type"] = "pdf"
+                    all_assignments.append(record)
             
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
