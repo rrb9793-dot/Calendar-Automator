@@ -7,8 +7,8 @@ from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
-from google.api_core.exceptions import ResourceExhausted
-
+#from google.api_core.exceptions import ResourceExhausted
+from openai import RateLimitError, APIError
 # --- CUSTOM MODULES ---
 import predictive_model 
 import syllabus_parser 
@@ -29,7 +29,8 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
 # Constants
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+#GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # ==========================================
 # ROUTES
@@ -92,25 +93,41 @@ def generate_schedule():
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
-                
                 try:
-                    # Try to parse the PDF
-                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                    # Pass the OPENAI key instead of GEMINI
+                    df = syllabus_parser.parse_syllabus_to_data(path, OPENAI_API_KEY)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     
-                    # Wait 2 seconds between files to avoid hitting the free tier limit
-                    time.sleep(2) 
+                    # OpenAI also has rate limits, so keeping a small sleep is good
+                    time.sleep(1) 
 
-                except ResourceExhausted:
-                    # If Google says "Stop", we return a 429 error gracefully
-                    print(f"❌ Quota Exceeded on file: {filename}")
+                except RateLimitError:
+                    print(f"❌ OpenAI Rate Limit Hit on file: {filename}")
                     return jsonify({
-                        'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
+                        'error': 'OpenAI Rate Limit Exceeded. Please check your credit balance or wait.'
                     }), 429
                 except Exception as e:
                     print(f"❌ Error processing {filename}: {e}")
                     continue
+                # try:
+                #     # Try to parse the PDF
+                #     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                #     if df is not None and not df.empty:
+                #         pdf_dfs.append(df)
+                    
+                #     # Wait 2 seconds between files to avoid hitting the free tier limit
+                #     time.sleep(2) 
+
+                # except ResourceExhausted:
+                #     # If Google says "Stop", we return a 429 error gracefully
+                #     print(f"❌ Quota Exceeded on file: {filename}")
+                #     return jsonify({
+                #         'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
+                #     }), 429
+                # except Exception as e:
+                #     print(f"❌ Error processing {filename}: {e}")
+                #     continue
             
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
