@@ -56,8 +56,10 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         # Upload File
         sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
         
+        # Wait for processing
+        # Increased sleep to 2s to reduce API call frequency
         while sample_file.state.name == "PROCESSING":
-            time.sleep(1)
+            time.sleep(2)
             sample_file = genai.get_file(sample_file.name)
             
         if sample_file.state.name != "ACTIVE":
@@ -92,15 +94,35 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         - Capture all exams and due dates.
         """
 
-        # --- UPDATED MODEL HERE ---
-        # Changed from 'gemini-1.5-flash-001' to 'gemini-2.0-flash'
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # --- CHANGED: Using 1.5 Flash for better rate limit stability ---
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
-        response = model.generate_content(
-            [sample_file, prompt],
-            generation_config={"response_mime_type": "application/json"}
-        )
+        # --- ADDED: Retry Logic for 429 Errors ---
+        max_retries = 5
+        base_delay = 5
+        response = None
+
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(
+                    [sample_file, prompt],
+                    generation_config={"response_mime_type": "application/json"}
+                )
+                break # Success, exit loop
+            except Exception as e:
+                # Check for "429" or "Resource Exhausted"
+                if "429" in str(e) or "resource exhausted" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        wait_time = base_delay * (2 ** attempt) # 5, 10, 20...
+                        print(f"⚠️ Rate limit hit (429). Retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                print(f"❌ Error generating content: {e}")
+                return None
         
+        if not response:
+            return None
+
         import json
         try:
             data = json.loads(response.text)
