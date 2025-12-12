@@ -31,10 +31,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Init Time Pickers
     initTimePickers();
-    // Add first row
+    
+    // Add Initial Rows
     addAssignmentRow();
-    // Add first PDF row
-    if(typeof addPdfRow === 'function') addPdfRow();
+    addPdfRow(); // Add one empty PDF row by default
+
+    // --- EVENT LISTENERS (MOVED INSIDE HERE) ---
+    // This prevents the "Cannot read properties of null" error
+    const addAssignBtn = document.getElementById('addAssignmentBtn');
+    if (addAssignBtn) addAssignBtn.addEventListener('click', addAssignmentRow);
+
+    const addPdfBtn = document.getElementById('addPdfBtn');
+    if (addPdfBtn) addPdfBtn.addEventListener('click', addPdfRow);
+
+    const submitBtn = document.getElementById('submitBtn');
+    if (submitBtn) submitBtn.addEventListener('click', handleSubmit);
 });
 
 // --- TIME PICKERS ---
@@ -68,10 +79,9 @@ function getPickerValue(id) {
 const assignmentsContainer = document.getElementById('assignmentsContainer');
 
 function addAssignmentRow() {
+    if (!assignmentsContainer) return;
     const div = document.createElement('div');
     div.className = 'syllabus-row';
-    
-    // Helper to build options
     const buildOpts = (arr) => arr.map(x => `<option value="${x}">${x}</option>`).join('');
 
     div.innerHTML = `
@@ -87,7 +97,6 @@ function addAssignmentRow() {
             <label style="font-size:0.7rem;">Sessions Needed</label>
             <input type="number" class="a-sessions" value="1" min="1">
         </div>
-
         <div>
             <label style="font-size:0.7rem;">Type</label>
             <select class="a-type"><option value="">Select...</option>${buildOpts(ASSIGNMENT_TYPES)}</select>
@@ -104,7 +113,6 @@ function addAssignmentRow() {
             <label style="font-size:0.7rem;">Location</label>
             <select class="a-location">${buildOpts(LOCATIONS)}</select>
         </div>
-
         <div class="span-2 checkbox-group">
             <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
                 <input type="checkbox" class="a-group" style="width:auto; margin-right:5px;"> Work in Group?
@@ -113,19 +121,18 @@ function addAssignmentRow() {
                 <input type="checkbox" class="a-person" style="width:auto; margin-right:5px;"> Submit In-Person?
             </label>
         </div>
-
         <div class="span-2" style="text-align:right;">
             <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove Task</button>
         </div>
     `;
     assignmentsContainer.appendChild(div);
 }
-document.getElementById('addAssignmentBtn').addEventListener('click', addAssignmentRow);
 
 // --- PDF ROW GENERATOR ---
-const pdfContainer = document.getElementById('pdfContainer');
-
 function addPdfRow() {
+    const pdfContainer = document.getElementById('pdfContainer');
+    if (!pdfContainer) return;
+
     const div = document.createElement('div');
     div.className = 'syllabus-row'; 
     div.style.gridTemplateColumns = "1fr 1fr 50px"; 
@@ -146,11 +153,8 @@ function addPdfRow() {
     pdfContainer.appendChild(div);
 }
 
-document.getElementById('addPdfBtn').addEventListener('click', addPdfRow);
-
-
-// --- SUBMIT ---
-document.getElementById('submitBtn').addEventListener('click', async () => {
+// --- SUBMIT HANDLER ---
+async function handleSubmit() {
     const btn = document.getElementById('submitBtn');
     btn.textContent = "PROCESSING...";
     btn.disabled = true;
@@ -174,7 +178,6 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
 
         const courses = [];
         document.querySelectorAll('.syllabus-row').forEach(row => {
-            // Check if this is an assignment row (has .a-name)
             if (row.querySelector('.a-name')) {
                 const item = {
                     assignment_name: row.querySelector('.a-name').value,
@@ -187,10 +190,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
                     work_in_group: row.querySelector('.a-group').checked ? "Yes" : "No",
                     submitted_in_person: row.querySelector('.a-person').checked ? "Yes" : "No"
                 };
-                
-                if (item.assignment_name && item.due_date) {
-                    courses.push(item);
-                }
+                if (item.assignment_name && item.due_date) courses.push(item);
             }
         });
 
@@ -202,7 +202,6 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
             const fileInput = row.querySelector('.pdf-file');
             const nameInput = row.querySelector('.pdf-course-name');
-    
             if (fileInput && fileInput.files.length > 0) {
                 formData.append(`pdf_${pdfIndex}`, fileInput.files[0]);
                 formData.append(`course_name_${pdfIndex}`, nameInput.value || "Unknown Course");
@@ -212,13 +211,9 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         formData.append('pdf_count', pdfIndex);
 
         const icsInput = document.getElementById('icsUpload');
-        if(icsInput.files.length > 0) formData.append('ics', icsInput.files[0]);
+        if(icsInput && icsInput.files.length > 0) formData.append('ics', icsInput.files[0]);
 
-        const response = await fetch('/api/generate-schedule', {
-            method: 'POST',
-            body: formData
-        });
-        
+        const response = await fetch('/api/generate-schedule', { method: 'POST', body: formData });
         const result = await response.json();
 
         if (response.ok) {
@@ -256,32 +251,27 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
     } finally {
         setTimeout(() => { btn.disabled = false; btn.textContent = "Initialize Optimization"; }, 2000);
     }
-});
+}
 
 // --- NEW: AUTOFILL FEATURE (ROBUST VERSION) ---
 const emailInput = document.getElementById('email');
 
 async function fetchUserPreferences() {
     const email = emailInput.value.trim();
-    
     if (email && email.includes('@')) {
         console.log("🔍 Checking database for:", email);
-        
         emailInput.style.opacity = "0.5"; 
         emailInput.style.borderColor = "var(--grid-line)"; 
 
         try {
             const res = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(email)}`);
-            
             if (!res.ok) {
                 console.log("User not found in DB (New User)");
                 return;
             }
-            
             const data = await res.json();
             console.log("✅ Data found:", data);
 
-            // Helper to fill values
             const setVal = (id, val) => {
                 const el = document.getElementById(id);
                 if (el && val && val !== 'null') el.value = val;
@@ -293,12 +283,10 @@ async function fetchUserPreferences() {
             setVal('second_concentration', data.second_concentration);
             setVal('minor', data.minor);
 
-            // Helper to fill time
             const setTime = (id, val) => {
                 if(!val || val === 'null') return;
                 let [h, m] = val.split(':');
-                if (h.length === 1) h = '0' + h; // ZERO PADDING FIX
-
+                if (h.length === 1) h = '0' + h; 
                 const el = document.getElementById(id);
                 if(el) {
                     const selects = el.querySelectorAll('select');
@@ -315,7 +303,6 @@ async function fetchUserPreferences() {
             setTime('weekendEnd', data.weekendEnd);
 
             emailInput.style.borderColor = "var(--accent-cyan)";
-            
         } catch (err) {
             console.error("Autofill Error:", err);
         } finally {
