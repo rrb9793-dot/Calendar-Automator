@@ -100,7 +100,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
         2. Times MUST be 24-hour format (HH:MM) if available. If not, null.
         """
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
 
         max_retries = 3
         response = None
