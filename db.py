@@ -7,7 +7,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def get_db_connection():
     try:
         if not DATABASE_URL:
-            print("❌ CRITICAL ERROR: DATABASE_URL is missing! Check Railway Variables.")
+            print("❌ CRITICAL ERROR: DATABASE_URL is missing!")
             return None
         return psycopg2.connect(DATABASE_URL)
     except Exception as e:
@@ -15,7 +15,6 @@ def get_db_connection():
         return None
 
 def save_user_preferences(survey, prefs):
-    """Saves student info to the 'user_preferences' table."""
     conn = get_db_connection()
     if not conn: return
 
@@ -23,18 +22,18 @@ def save_user_preferences(survey, prefs):
         cur = conn.cursor()
         print(f"📝 Saving Preferences for: {survey.get('email')}")
 
-        # NOTICE: We are inserting into 'user_preferences' now.
-        # We use double quotes "second concentration" just in case your column has a space.
+        # --- THE FIX IS HERE ---
+        # We use strictly 'second_concentration' (no quotes, no spaces)
         query = """
             INSERT INTO user_preferences (
-                email, timezone, year, major, "second_concentration", minor,
+                email, timezone, year, major, second_concentration, minor,
                 weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (email) DO UPDATE SET
                 timezone = EXCLUDED.timezone,
                 year = EXCLUDED.year,
                 major = EXCLUDED.major,
-                "second concentration" = EXCLUDED."second concentration",
+                second_concentration = EXCLUDED.second_concentration,
                 minor = EXCLUDED.minor,
                 weekday_start_hour = EXCLUDED.weekday_start_hour,
                 weekday_end_hour = EXCLUDED.weekday_end_hour,
@@ -61,18 +60,16 @@ def save_user_preferences(survey, prefs):
 
     except Exception as e:
         print(f"❌ ERROR SAVING PREFERENCES: {e}")
-        # If it fails on 'second concentration', try removing the quotes in the query above
+        # Debug helper: Prints exactly what column names Python thinks it's sending
         if conn: conn.rollback()
 
 def save_assignment(email, course_data, predicted_hours=0):
-    """Saves a single assignment to the 'assignments' table."""
     conn = get_db_connection()
     if not conn: return
 
     try:
         cur = conn.cursor()
         
-        # Convert "Yes"/"No" to Boolean for Postgres
         is_group = True if course_data.get('work_in_group') == "Yes" else False
         is_person = True if course_data.get('submitted_in_person') == "Yes" else False
         
