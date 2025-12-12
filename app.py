@@ -103,23 +103,30 @@ def generate_schedule():
             })
 
         # B. PDF Entries (From Parsing with GEMINI)
-        uploaded_pdfs = request.files.getlist('pdfs')
-        if uploaded_pdfs:
-            print(f"Processing {len(uploaded_pdfs)} PDF(s) with Gemini...")
+        pdf_count = int(request.form.get('pdf_count', 0))
+        
+        if pdf_count > 0:
+            print(f"Processing {pdf_count} PDF(s)...")
             pdf_dfs = []
-            for pdf in uploaded_pdfs:
-                if pdf.filename == '': continue
+            
+            for i in range(pdf_count):
+                pdf = request.files.get(f'pdf_{i}')
+                course_name = request.form.get(f'course_name_{i}', 'Unknown Course') # Get the manual name
+                
+                if not pdf or pdf.filename == '': continue
+                
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
                 try:
-                    # --- GEMINI PARSING LOGIC ---
-                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                    # PASS THE MANUAL NAME HERE
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     
                     time.sleep(2) 
+                # ... (keep existing exception handling) ...
 
                 except ResourceExhausted:
                     print(f"❌ Quota Exceeded on file: {filename}")
