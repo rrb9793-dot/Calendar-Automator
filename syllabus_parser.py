@@ -95,7 +95,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         """
 
         # --- CHANGED: Using 1.5 Flash for better rate limit stability ---
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
 
         # --- ADDED: Retry Logic for 429 Errors ---
         max_retries = 5
