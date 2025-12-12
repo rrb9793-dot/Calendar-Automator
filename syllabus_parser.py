@@ -55,7 +55,8 @@ def resolve_time(row, schedule_map):
     return "23:59"
 
 # --- PARSING ENGINE ---
-def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
+# [FIX] Added manual_course_name argument here
+def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_name: str = None):
     active_key = api_key if api_key else DEFAULT_API_KEY
     if not active_key:
         print("❌ Error: No GEMINI_API_KEY found.")
@@ -134,7 +135,10 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         
         # --- Process Metadata ---
         meta = data.get("metadata", {})
-        course_name = meta.get("course_name", "Unknown Course")
+        
+        # [FIX] Override AI extracted name if manual name is provided
+        ai_extracted_name = meta.get("course_name", "Unknown Course")
+        course_name = manual_course_name if manual_course_name else ai_extracted_name
         
         schedule_map = {}
         for meeting in meta.get("class_meetings", []):
@@ -154,7 +158,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         # Now .get() is safe because we ensured data is a dict
         for item in data.get("assignments", []):
             rows.append({
-                "Course": course_name,
+                "Course": course_name, # Uses the manual name if provided
                 "Date": item.get("date"),
                 "Time": item.get("time"), 
                 "Category": item.get("category", "Other"),
