@@ -12,7 +12,7 @@ from google.api_core.exceptions import ResourceExhausted
 import predictive_model 
 import syllabus_parser 
 import calendar_maker
-import db  # <--- Loads our new db.py
+import db 
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +28,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
-# --- USING GEMINI KEY ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # ==========================================
@@ -43,12 +42,26 @@ def home():
 def download_file(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
 
+# --- [FIX] ADDED THIS MISSING ROUTE ---
+@app.route('/api/get-user-preferences', methods=['GET'])
+def get_user_preferences_route():
+    email = request.args.get('email')
+    if not email:
+        return jsonify({}), 400
+    
+    # Fetch from DB
+    data = db.get_user_preferences(email)
+    
+    if data:
+        return jsonify(data)
+    else:
+        return jsonify({}), 404
+# --------------------------------------
+
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
-        # ---------------------------------------------------------
         # 1. GATHER INPUTS
-        # ---------------------------------------------------------
         data_str = request.form.get('data')
         req_data = json.loads(data_str) if data_str else {}
         
@@ -56,12 +69,9 @@ def generate_schedule():
         survey_data = req_data.get('survey', {})
         manual_courses = req_data.get('courses', [])
 
-        # --- [STEP 1] SAVE USER PREFERENCES TO DB ---
+        # --- SAVE PREFERENCES ---
         if survey_data.get('email'):
-            # Using the correct function for your 'user_preferences' table
             db.save_user_preferences(survey_data, frontend_prefs)
-        else:
-            print("⚠️ Skipping preferences save (No email provided)")
 
         # B. User ICS Files
         ics_files_bytes = []
@@ -72,12 +82,10 @@ def generate_schedule():
                     ics_files_bytes.append(f.read())
                     f.seek(0)
 
-        # ---------------------------------------------------------
-        # 2. AGGREGATE ASSIGNMENTS (MANUAL + PDF)
-        # ---------------------------------------------------------
+        # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries (From Frontend)
+        # A. Manual Entries
         for course in manual_courses:
             all_assignments.append({
                 "source_type": "manual",
@@ -88,32 +96,30 @@ def generate_schedule():
                 "raw_details": course 
             })
 
-        # B. PDF Entries (From Parsing with GEMINI)
-        uploaded_pdfs = request.files.getlist('pdfs')
-        if uploaded_pdfs:
-            print(f"Processing {len(uploaded_pdfs)} PDF(s) with Gemini...")
+        # B. PDF Entries
+        pdf_count = int(request.form.get('pdf_count', 0))
+        
+        if pdf_count > 0:
+            print(f"Processing {pdf_count} PDF(s) with Gemini...")
             pdf_dfs = []
-            for pdf in uploaded_pdfs:
-                if pdf.filename == '': continue
+            
+            for i in range(pdf_count):
+                pdf = request.files.get(f'pdf_{i}')
+                course_name = request.form.get(f'course_name_{i}', 'Unknown Course')
+                
+                if not pdf or pdf.filename == '': continue
+                
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
                 try:
-                    # --- GEMINI PARSING LOGIC ---
-                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
-                    
-                    # Wait 2 seconds between files to avoid hitting the free tier limit
                     time.sleep(2) 
-
                 except ResourceExhausted:
-                    # If Google says "Stop", we return a 429 error gracefully
-                    print(f"❌ Quota Exceeded on file: {filename}")
-                    return jsonify({
-                        'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
-                    }), 429
+                    return jsonify({'error': 'Google AI Quota Exceeded. Please wait.'}), 429
                 except Exception as e:
                     print(f"❌ Error processing {filename}: {e}")
                     continue
@@ -121,23 +127,17 @@ def generate_schedule():
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
                 final_df = syllabus_parser.consolidate_assignments(master_df)
-                parsed_records = final_df.to_dict(orient='records')
-                
-                for record in parsed_records:
+                for record in final_df.to_dict(orient='records'):
                     record["source_type"] = "pdf"
                     all_assignments.append(record)
 
-        # ---------------------------------------------------------
-        # 3. PREDICTION & DATABASE SAVING
-        # ---------------------------------------------------------
+        # 3. PREDICTION & DB SAVE
         formatted_assignments = []
         
         for i, item in enumerate(all_assignments):
-            # A. Prepare details for prediction
             if item["source_type"] == "manual":
                 assignment_details = item["raw_details"]
             else:
-                # PDF entries defaults
                 assignment_details = {
                     'assignment_name': item.get("Assignment", "Untitled"),
                     'work_sessions': 1,
@@ -149,21 +149,16 @@ def generate_schedule():
                     'submitted_in_person': 'No'
                 }
 
-            # B. Run Prediction
             predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
             
-            # --- [STEP 2] SAVE ASSIGNMENT TO DB ---
-            # Only save manual entries to DB
             if item["source_type"] == "manual" and survey_data.get('email'):
                 db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
-            # C. Format Date/Time
             date_str = item.get("Date")
             time_str = item.get("Time")
             if not time_str: time_str = "11:59 PM"
             full_due_string = f"{date_str} {time_str}"
             
-            # D. Final Structure for Calendar Maker
             formatted_assignments.append({
                 "id": f"assign_{i}",
                 "name": item.get("Assignment", "Untitled Task"),
@@ -174,9 +169,7 @@ def generate_schedule():
                 "assignment_type": assignment_details.get('assignment_type', 'p_set')
             })
 
-        # ---------------------------------------------------------
         # 4. CALENDAR GENERATION
-        # ---------------------------------------------------------
         backend_preferences = {
             "timezone": frontend_prefs.get('timezone', 'America/New_York'),
             "work_windows": {
