@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
+from google.api_core.exceptions import ResourceExhausted
 
 # --- CUSTOM MODULES ---
 import predictive_model 
@@ -81,6 +82,7 @@ def generate_schedule():
             })
 
         # B. PDF Entries (From Parsing)
+        # B. PDF Entries (From Parsing)
         uploaded_pdfs = request.files.getlist('pdfs')
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
@@ -91,9 +93,24 @@ def generate_schedule():
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
-                df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
-                if df is not None and not df.empty:
-                    pdf_dfs.append(df)
+                try:
+                    # Try to parse the PDF
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                    if df is not None and not df.empty:
+                        pdf_dfs.append(df)
+                    
+                    # Wait 2 seconds between files to avoid hitting the free tier limit
+                    time.sleep(2) 
+
+                except ResourceExhausted:
+                    # If Google says "Stop", we return a 429 error gracefully
+                    print(f"❌ Quota Exceeded on file: {filename}")
+                    return jsonify({
+                        'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
+                    }), 429
+                except Exception as e:
+                    print(f"❌ Error processing {filename}: {e}")
+                    continue
             
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
