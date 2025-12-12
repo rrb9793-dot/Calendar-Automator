@@ -92,7 +92,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         }
         
         Rules:
-        - Dates must be YYYY-MM-DD.
+        - Dates format must be YYYY-MM-DD.
         - If no time is listed, use null.
         - Capture all exams and due dates.
         """
