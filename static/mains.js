@@ -136,7 +136,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         };
 
         const preferences = {
-            timezone: document.getElementById('timezone').value, // <--- ADDED TIMEZONE
+            timezone: document.getElementById('timezone').value, 
             weekdayStart: getPickerValue('weekdayStart'),
             weekdayEnd: getPickerValue('weekdayEnd'),
             weekendStart: getPickerValue('weekendStart'),
@@ -214,3 +214,56 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         setTimeout(() => { btn.disabled = false; btn.textContent = "Initialize Optimization"; }, 2000);
     }
 });
+
+// --- NEW: AUTOFILL FEATURE ---
+// Listens for when the user finishes typing their email
+const emailInput = document.getElementById('email');
+
+if (emailInput) {
+    emailInput.addEventListener('blur', () => {
+        const email = emailInput.value;
+        // Only try if it looks like an email
+        if (email && email.includes('@')) {
+            console.log("Checking for saved preferences...");
+            
+            fetch(`/api/get-user-preferences?email=${encodeURIComponent(email)}`)
+                .then(res => {
+                    if (res.ok) return res.json();
+                    throw new Error('User not found');
+                })
+                .then(data => {
+                    console.log("Found user data:", data);
+
+                    // 1. Fill Dropdowns (if data exists)
+                    if(data.year) document.getElementById('studentYear').value = data.year;
+                    if(data.timezone) document.getElementById('timezone').value = data.timezone;
+                    if(data.major) document.getElementById('major').value = data.major;
+                    if(data.second_concentration) document.getElementById('second_concentration').value = data.second_concentration;
+                    if(data.minor) document.getElementById('minor').value = data.minor;
+
+                    // 2. Fill Time Pickers (Helper function to split 09:00 into 09 and 00)
+                    const setTime = (id, val) => {
+                        if(!val) return;
+                        const [h, m] = val.split(':');
+                        const el = document.getElementById(id);
+                        if(el) {
+                            const selects = el.querySelectorAll('select');
+                            if(selects.length === 2) { 
+                                selects[0].value = h; 
+                                selects[1].value = m; 
+                            }
+                        }
+                    };
+
+                    setTime('weekdayStart', data.weekdayStart);
+                    setTime('weekdayEnd', data.weekdayEnd);
+                    setTime('weekendStart', data.weekendStart);
+                    setTime('weekendEnd', data.weekendEnd);
+                })
+                .catch(err => {
+                    // It's normal to fail if it's a new user, so we just log silently
+                    console.log('No saved preferences found for this email.');
+                });
+        }
+    });
+}
