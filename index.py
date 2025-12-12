@@ -31,6 +31,9 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 # Constants
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 # ==========================================
 # ROUTES
 # ==========================================
