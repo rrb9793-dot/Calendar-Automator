@@ -43,6 +43,16 @@
                     </select>
                 </div>
                 <div class="field">
+                    <label>Timezone</label>
+                    <select id="timezone">
+                        <option value="America/New_York">Eastern Time (US & Canada)</option>
+                        <option value="America/Chicago">Central Time (US & Canada)</option>
+                        <option value="America/Denver">Mountain Time (US & Canada)</option>
+                        <option value="America/Los_Angeles">Pacific Time (US & Canada)</option>
+                        <option value="UTC">UTC</option>
+                    </select>
+                </div>
+                <div class="field">
                     <label>Primary Major</label>
                     <select id="major" class="major-select"></select>
                 </div>
@@ -113,9 +123,7 @@
             <div class="card-header-pill" style="background: var(--accent-cyan); color: #fff;">Success</div>
             <h3 style="margin-top:15px;">Optimization Complete</h3>
             <p>Your schedule has been generated.</p>
-            
             <div id="predictionList" class="prediction-container"></div>
-            
             <a id="downloadLink" href="#" class="btn btn-primary" style="background: var(--accent-cyan); margin-top:15px; display:inline-block; text-decoration:none;">Download .ICS File</a>
         </div>
 
