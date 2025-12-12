@@ -21,19 +21,26 @@ def get_user_preferences(email):
     if not conn: return None
     try:
         cur = conn.cursor()
-        # Case-insensitive search
+        
+        # DEBUG: Print what we are searching for
+        clean_email = email.strip()
+        print(f"🔍 DB SEARCH: Searching for '{clean_email}'...")
+
+        # UPDATED: Use TRIM(LOWER()) to ignore hidden spaces and capitalization
         query = """
             SELECT year, timezone, major, second_concentration, minor,
                    weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
             FROM user_preferences
-            WHERE LOWER(email) = LOWER(%s);
+            WHERE TRIM(LOWER(email)) = TRIM(LOWER(%s));
         """
-        cur.execute(query, (email.strip(),))
+        cur.execute(query, (clean_email,))
         row = cur.fetchone()
         cur.close()
         conn.close()
 
         if row:
+            print(f"✅ FOUND DATA: {row}") # Shows up in Railway Logs
+            # Return as a dictionary so the frontend can use it
             return {
                 "year": row[0],
                 "timezone": row[1],
@@ -45,20 +52,26 @@ def get_user_preferences(email):
                 "weekendStart": row[7],
                 "weekendEnd": row[8]
             }
+        
+        print(f"⚠️ NO MATCH FOUND in DB for: {clean_email}")
         return None
+
     except Exception as e:
         print(f"❌ Error fetching preferences: {e}")
         return None
 
 # --- SAVE USER PREFERENCES ---
 def save_user_preferences(survey, prefs):
+    """Saves student info to the 'user_preferences' table."""
     conn = get_db_connection()
     if not conn: return
 
     try:
         cur = conn.cursor()
-        print(f"📝 Saving Preferences for: {survey.get('email')}")
+        email = survey.get('email', '').strip()
+        print(f"📝 Saving Preferences for: {email}")
 
+        # Using 'second_concentration' (underscore) to match your DB schema
         query = """
             INSERT INTO user_preferences (
                 email, timezone, year, major, second_concentration, minor,
@@ -77,7 +90,7 @@ def save_user_preferences(survey, prefs):
         """
         
         cur.execute(query, (
-            survey.get('email'),
+            email,
             prefs.get('timezone', 'UTC'),
             int(survey.get('year', 0)) if survey.get('year') else 0,
             survey.get('major'),
@@ -89,7 +102,7 @@ def save_user_preferences(survey, prefs):
             prefs.get('weekendEnd')
         ))
         conn.commit()
-        print(f"✅ User Preferences Saved: {survey.get('email')}")
+        print(f"✅ User Preferences Saved: {email}")
         cur.close()
         conn.close()
 
@@ -99,12 +112,14 @@ def save_user_preferences(survey, prefs):
 
 # --- SAVE ASSIGNMENT ---
 def save_assignment(email, course_data, predicted_hours=0):
+    """Saves a single assignment to the 'assignments' table."""
     conn = get_db_connection()
     if not conn: return
 
     try:
         cur = conn.cursor()
         
+        # Convert "Yes"/"No" to Boolean for Postgres
         is_group = True if course_data.get('work_in_group') == "Yes" else False
         is_person = True if course_data.get('submitted_in_person') == "Yes" else False
         
@@ -126,7 +141,7 @@ def save_assignment(email, course_data, predicted_hours=0):
             course_data.get('work_location'),
             is_group,
             is_person,
-            email
+            email.strip() # Strip email here too
         ))
         conn.commit()
         print(f"✅ Assignment Saved: {course_data.get('assignment_name')}")
