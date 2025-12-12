@@ -2,18 +2,17 @@ import os
 import json
 import time
 import pandas as pd
-from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
-from openai import RateLimitError, APIError
+from openai import RateLimitError
 
 # --- CUSTOM MODULES ---
 import predictive_model 
 import syllabus_parser 
 import calendar_maker
-import db  # <--- IMPORT DB MODULE
+import db  # <--- Loads our new db.py
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # ==========================================
 # ROUTES
@@ -56,10 +55,11 @@ def generate_schedule():
         survey_data = req_data.get('survey', {})
         manual_courses = req_data.get('courses', [])
 
-        # --- [DB STEP 1] SAVE STUDENT PROFILE ---
-        # We save this immediately so the user exists for Foreign Keys
+        # --- [STEP 1] SAVE STUDENT PROFILE TO DB ---
         if survey_data.get('email'):
             db.save_student_profile(survey_data, frontend_prefs)
+        else:
+            print("⚠️ Skipping profile save (No email provided)")
 
         # B. User ICS Files
         ics_files_bytes = []
@@ -83,7 +83,7 @@ def generate_schedule():
                 "Date": course.get('due_date'),
                 "Time": "23:59", 
                 "Course": course.get('field_of_study', 'General'),
-                "raw_details": course # Frontend inputs
+                "raw_details": course 
             })
 
         # B. PDF Entries (From Parsing)
@@ -112,13 +112,12 @@ def generate_schedule():
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
                 final_df = syllabus_parser.consolidate_assignments(master_df)
                 parsed_records = final_df.to_dict(orient='records')
-                
                 for record in parsed_records:
                     record["source_type"] = "pdf"
                     all_assignments.append(record)
 
         # ---------------------------------------------------------
-        # 3. PREDICTION & FORMATTING (AND DB SAVING)
+        # 3. PREDICTION & DATABASE SAVING
         # ---------------------------------------------------------
         formatted_assignments = []
         
@@ -127,7 +126,7 @@ def generate_schedule():
             if item["source_type"] == "manual":
                 assignment_details = item["raw_details"]
             else:
-                # Defaults for PDF entries
+                # PDF entries defaults
                 assignment_details = {
                     'assignment_name': item.get("Assignment", "Untitled"),
                     'work_sessions': 1,
@@ -142,9 +141,8 @@ def generate_schedule():
             # B. Run Prediction
             predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
             
-            # --- [DB STEP 2] SAVE ASSIGNMENT ---
-            # We save here because we now have the 'predicted_hours' required by your table
-            # We only save manual entries to keep the DB clean for user-submitted data
+            # --- [STEP 2] SAVE ASSIGNMENT TO DB ---
+            # Only save manual entries to DB to match your request
             if item["source_type"] == "manual" and survey_data.get('email'):
                 db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
@@ -206,6 +204,4 @@ def generate_schedule():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Initialize DB tables on startup
-    db.init_db()
     app.run(debug=True, port=5000)
