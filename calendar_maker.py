@@ -335,12 +335,9 @@ def create_output_ics(scheduled_tasks, output_path):
 
     for task in scheduled_tasks:
         event = Event()
-        class_name = task.get('class_name', '')
-        summary_text = f"Study: {task['assignment_name']}"
         start = task['start']
         end = task['end']
-        if class_name and class_name != "General":
-            summary_text += f" - {class_name}"
+        
         if isinstance(start, str): start = datetime.fromisoformat(start)
         if isinstance(end, str): end = datetime.fromisoformat(end)
 
