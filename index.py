@@ -7,7 +7,6 @@ from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
-import google.generativeai as genai
 
 # --- CUSTOM MODULES ---
 import predictive_model 
@@ -31,24 +30,12 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 # Constants
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
 # ==========================================
 # ROUTES
 # ==========================================
 
 @app.route('/', methods=['GET'])
 def home():
-    print("--- CHECKING AVAILABLE GEMINI MODELS ---")
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(f"Found model: {m.name}")
-    except Exception as e:
-        print(f"Error listing models: {e}")
-    print("----------------------------------------")
-    # --- DEBUGGING END ---
     return render_template('mains.html')
 
 @app.route('/download/<filename>')
@@ -163,7 +150,8 @@ def generate_schedule():
         # 4. CALENDAR GENERATION
         # ---------------------------------------------------------
         backend_preferences = {
-            "timezone": "America/New_York",
+            # Use frontend timezone, default to New York if missing
+            "timezone": frontend_prefs.get('timezone', 'America/New_York'),
             "work_windows": {
                 "weekday_start_hour": float(frontend_prefs.get('weekdayStart', '09:00').split(':')[0]),
                 "weekday_end_hour": float(frontend_prefs.get('weekdayEnd', '22:00').split(':')[0]),
@@ -190,7 +178,7 @@ def generate_schedule():
                 'scheduled': result['scheduled_count'],
                 'unscheduled': result['unscheduled_count']
             },
-            'assignments': formatted_assignments # <--- NEW: SENDING PREDICTIONS BACK
+            'assignments': formatted_assignments
         })
 
     except Exception as e:
