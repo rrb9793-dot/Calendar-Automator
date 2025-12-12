@@ -1,143 +1,230 @@
 import os
-import psycopg2
+import json
+import time
+import pandas as pd
+from flask import Flask, request, jsonify, render_template, send_file
+from flask_cors import CORS
+from werkzeug.utils import secure_filename
+from whitenoise import WhiteNoise
+from google.api_core.exceptions import ResourceExhausted
 
-# --- DATABASE CONFIGURATION ---
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# --- CUSTOM MODULES ---
+import predictive_model 
+import syllabus_parser 
+import calendar_maker
+import db  # <--- Loads our updated db.py
 
-def get_db_connection():
+# --- CONFIGURATION ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_DIR = os.path.join(BASE_DIR, 'templates')
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
+
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+CORS(app)
+app.wsgi_app = WhiteNoise(app.wsgi_app, root=STATIC_DIR, prefix='static/')
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
+
+# --- USING GEMINI KEY ---
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# ==========================================
+# ROUTES
+# ==========================================
+
+@app.route('/', methods=['GET'])
+def home():
+    return render_template('mains.html')
+
+@app.route('/download/<filename>')
+def download_file(filename):
+    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
+
+# --- NEW ROUTE: AUTOFILL ---
+@app.route('/api/get-user-preferences', methods=['GET'])
+def get_user_preferences_route():
+    email = request.args.get('email')
+    if not email:
+        return jsonify({}), 400
+    
+    # Fetch from DB
+    data = db.get_user_preferences(email)
+    
+    if data:
+        return jsonify(data)
+    else:
+        return jsonify({}), 404
+
+@app.route('/api/generate-schedule', methods=['POST'])
+def generate_schedule():
     try:
-        if not DATABASE_URL:
-            print("❌ CRITICAL ERROR: DATABASE_URL is missing! Check Railway Variables.")
-            return None
-        return psycopg2.connect(DATABASE_URL)
-    except Exception as e:
-        print(f"❌ DATABASE CONNECTION FAILED: {e}")
-        return None
+        # ---------------------------------------------------------
+        # 1. GATHER INPUTS
+        # ---------------------------------------------------------
+        data_str = request.form.get('data')
+        req_data = json.loads(data_str) if data_str else {}
+        
+        frontend_prefs = req_data.get('preferences', {})
+        survey_data = req_data.get('survey', {})
+        manual_courses = req_data.get('courses', [])
 
-# --- FETCH USER PREFERENCES (FOR AUTOFILL) ---
-def get_user_preferences(email):
-    """Fetches a user's saved settings to autofill the frontend."""
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        cur = conn.cursor()
-        # Fetching the user's saved settings
-        query = """
-            SELECT year, timezone, major, second_concentration, minor,
-                   weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
-            FROM user_preferences
-            WHERE email = %s;
-        """
-        cur.execute(query, (email,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
+        # --- [STEP 1] SAVE USER PREFERENCES TO DB ---
+        if survey_data.get('email'):
+            db.save_user_preferences(survey_data, frontend_prefs)
+        else:
+            print("⚠️ Skipping preferences save (No email provided)")
 
-        if row:
-            # Return as a dictionary so the frontend can use it
-            return {
-                "year": row[0],
-                "timezone": row[1],
-                "major": row[2],
-                "second_concentration": row[3],
-                "minor": row[4],
-                "weekdayStart": row[5],
-                "weekdayEnd": row[6],
-                "weekendStart": row[7],
-                "weekendEnd": row[8]
+        # B. User ICS Files
+        ics_files_bytes = []
+        if 'ics' in request.files:
+            files = request.files.getlist('ics')
+            for f in files:
+                if f.filename != '':
+                    ics_files_bytes.append(f.read())
+                    f.seek(0)
+
+        # ---------------------------------------------------------
+        # 2. AGGREGATE ASSIGNMENTS (MANUAL + PDF)
+        # ---------------------------------------------------------
+        all_assignments = []
+        
+        # A. Manual Entries (From Frontend)
+        for course in manual_courses:
+            all_assignments.append({
+                "source_type": "manual",
+                "Assignment": course.get('assignment_name'),
+                "Date": course.get('due_date'),
+                "Time": "23:59", 
+                "Course": course.get('field_of_study', 'General'),
+                "raw_details": course 
+            })
+
+        # B. PDF Entries (From Parsing with GEMINI)
+        uploaded_pdfs = request.files.getlist('pdfs')
+        if uploaded_pdfs:
+            print(f"Processing {len(uploaded_pdfs)} PDF(s) with Gemini...")
+            pdf_dfs = []
+            for pdf in uploaded_pdfs:
+                if pdf.filename == '': continue
+                filename = secure_filename(pdf.filename)
+                path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                pdf.save(path)
+                
+                try:
+                    # --- GEMINI PARSING LOGIC ---
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                    if df is not None and not df.empty:
+                        pdf_dfs.append(df)
+                    
+                    time.sleep(2) 
+
+                except ResourceExhausted:
+                    print(f"❌ Quota Exceeded on file: {filename}")
+                    return jsonify({
+                        'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
+                    }), 429
+                except Exception as e:
+                    print(f"❌ Error processing {filename}: {e}")
+                    continue
+            
+            if pdf_dfs:
+                master_df = pd.concat(pdf_dfs, ignore_index=True)
+                final_df = syllabus_parser.consolidate_assignments(master_df)
+                parsed_records = final_df.to_dict(orient='records')
+                
+                for record in parsed_records:
+                    record["source_type"] = "pdf"
+                    all_assignments.append(record)
+
+        # ---------------------------------------------------------
+        # 3. PREDICTION & DATABASE SAVING
+        # ---------------------------------------------------------
+        formatted_assignments = []
+        
+        for i, item in enumerate(all_assignments):
+            # A. Prepare details for prediction
+            if item["source_type"] == "manual":
+                assignment_details = item["raw_details"]
+            else:
+                # PDF entries defaults
+                assignment_details = {
+                    'assignment_name': item.get("Assignment", "Untitled"),
+                    'work_sessions': 1,
+                    'assignment_type': item.get('Category', 'p_set'), 
+                    'field_of_study': survey_data.get('major', 'Business'),
+                    'external_resources': 'Google/internet',
+                    'work_location': 'School/library',
+                    'work_in_group': 'No',
+                    'submitted_in_person': 'No'
+                }
+
+            # B. Run Prediction
+            predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
+            
+            # --- [STEP 2] SAVE ASSIGNMENT TO DB ---
+            # Only save manual entries to DB
+            if item["source_type"] == "manual" and survey_data.get('email'):
+                db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
+
+            # C. Format Date/Time
+            date_str = item.get("Date")
+            time_str = item.get("Time")
+            if not time_str: time_str = "11:59 PM"
+            full_due_string = f"{date_str} {time_str}"
+            
+            # D. Final Structure for Calendar Maker
+            formatted_assignments.append({
+                "id": f"assign_{i}",
+                "name": item.get("Assignment", "Untitled Task"),
+                "class_name": item.get("Course", "General"),
+                "due_date": full_due_string, 
+                "time_estimate": float(predicted_hours), 
+                "sessions_needed": int(assignment_details.get('work_sessions', 1)),
+                "assignment_type": assignment_details.get('assignment_type', 'p_set')
+            })
+
+        # ---------------------------------------------------------
+        # 4. CALENDAR GENERATION
+        # ---------------------------------------------------------
+        backend_preferences = {
+            "timezone": frontend_prefs.get('timezone', 'America/New_York'),
+            "work_windows": {
+                "weekday_start_hour": float(frontend_prefs.get('weekdayStart', '09:00').split(':')[0]),
+                "weekday_end_hour": float(frontend_prefs.get('weekdayEnd', '22:00').split(':')[0]),
+                "weekend_start_hour": float(frontend_prefs.get('weekendStart', '10:00').split(':')[0]),
+                "weekend_end_hour": float(frontend_prefs.get('weekendEnd', '20:00').split(':')[0])
             }
-        return None
-    except Exception as e:
-        print(f"❌ Error fetching preferences: {e}")
-        return None
+        }
 
-# --- SAVE USER PREFERENCES ---
-def save_user_preferences(survey, prefs):
-    """Saves student info to the 'user_preferences' table."""
-    conn = get_db_connection()
-    if not conn: return
+        calendar_input_data = {
+            "user_preferences": backend_preferences,
+            "assignments": formatted_assignments
+        }
 
-    try:
-        cur = conn.cursor()
-        print(f"📝 Saving Preferences for: {survey.get('email')}")
+        result = calendar_maker.process_schedule_request(
+            calendar_input_data, 
+            ics_files_bytes,
+            app.config['UPLOAD_FOLDER']
+        )
 
-        # Using 'second_concentration' (underscore) to match your DB schema
-        query = """
-            INSERT INTO user_preferences (
-                email, timezone, year, major, second_concentration, minor,
-                weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (email) DO UPDATE SET
-                timezone = EXCLUDED.timezone,
-                year = EXCLUDED.year,
-                major = EXCLUDED.major,
-                second_concentration = EXCLUDED.second_concentration,
-                minor = EXCLUDED.minor,
-                weekday_start_hour = EXCLUDED.weekday_start_hour,
-                weekday_end_hour = EXCLUDED.weekday_end_hour,
-                weekend_start_hour = EXCLUDED.weekend_start_hour,
-                weekend_end_hour = EXCLUDED.weekend_end_hour;
-        """
-        
-        cur.execute(query, (
-            survey.get('email'),
-            prefs.get('timezone', 'UTC'),
-            int(survey.get('year', 0)) if survey.get('year') else 0,
-            survey.get('major'),
-            survey.get('second_concentration', 'N/A'),
-            survey.get('minor', 'N/A'),
-            prefs.get('weekdayStart'),
-            prefs.get('weekdayEnd'),
-            prefs.get('weekendStart'),
-            prefs.get('weekendEnd')
-        ))
-        conn.commit()
-        print(f"✅ User Preferences Saved: {survey.get('email')}")
-        cur.close()
-        conn.close()
+        return jsonify({
+            'message': 'Success',
+            'ics_url': f"/download/{result['ics_filename']}",
+            'stats': {
+                'scheduled': result['scheduled_count'],
+                'unscheduled': result['unscheduled_count']
+            },
+            'assignments': formatted_assignments
+        })
 
     except Exception as e:
-        print(f"❌ ERROR SAVING PREFERENCES: {e}")
-        if conn: conn.rollback()
+        print(f"API Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
-# --- SAVE ASSIGNMENT ---
-def save_assignment(email, course_data, predicted_hours=0):
-    """Saves a single assignment to the 'assignments' table."""
-    conn = get_db_connection()
-    if not conn: return
-
-    try:
-        cur = conn.cursor()
-        
-        # Convert "Yes"/"No" to Boolean for Postgres
-        is_group = True if course_data.get('work_in_group') == "Yes" else False
-        is_person = True if course_data.get('submitted_in_person') == "Yes" else False
-        
-        query = """
-            INSERT INTO assignments (
-                assignment_name, assignment_type, field_of_study, 
-                external_resources, work_sessions, time_spent_hours, 
-                work_location, work_in_group, submit_in_person, email
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        
-        cur.execute(query, (
-            course_data.get('assignment_name'),
-            course_data.get('assignment_type'),
-            course_data.get('field_of_study'),
-            course_data.get('external_resources'),
-            int(course_data.get('work_sessions', 1)),
-            int(predicted_hours), 
-            course_data.get('work_location'),
-            is_group,
-            is_person,
-            email
-        ))
-        conn.commit()
-        print(f"✅ Assignment Saved: {course_data.get('assignment_name')}")
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-        print(f"❌ ERROR SAVING ASSIGNMENT: {e}")
-        if conn: conn.rollback()
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
