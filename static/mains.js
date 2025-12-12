@@ -196,8 +196,8 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         const formData = new FormData();
         formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
-        #const pdfInput = document.getElementById('pdfUpload');
-        #for(let i=0; i<pdfInput.files.length; i++) formData.append('pdfs', pdfInput.files[i]);
+        //const pdfInput = document.getElementById('pdfUpload');
+        //for(let i=0; i<pdfInput.files.length; i++) formData.append('pdfs', pdfInput.files[i]);
         let pdfIndex = 0;
         document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
             const fileInput = row.querySelector('.pdf-file');
