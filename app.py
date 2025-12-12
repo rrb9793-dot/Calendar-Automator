@@ -42,7 +42,7 @@ def home():
 def download_file(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
 
-# --- [FIX] ADDED THIS MISSING ROUTE ---
+# --- USER PREFERENCES ROUTE ---
 @app.route('/api/get-user-preferences', methods=['GET'])
 def get_user_preferences_route():
     email = request.args.get('email')
@@ -56,8 +56,8 @@ def get_user_preferences_route():
         return jsonify(data)
     else:
         return jsonify({}), 404
-# --------------------------------------
 
+# --- GENERATE SCHEDULE ROUTE ---
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
@@ -114,10 +114,19 @@ def generate_schedule():
                 pdf.save(path)
                 
                 try:
+                    # CALLING PARSER WITH MANUAL NAME
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     time.sleep(2) 
+                except TypeError as te:
+                    # FALLBACK: If syllabus_parser isn't updated yet, try without the name
+                    print(f"Warning: syllabus_parser outdated. {te}")
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
+                    if df is not None and not df.empty:
+                        # Manually set the course name since the parser couldn't
+                        df['Course'] = course_name
+                        pdf_dfs.append(df)
                 except ResourceExhausted:
                     return jsonify({'error': 'Google AI Quota Exceeded. Please wait.'}), 429
                 except Exception as e:
@@ -139,14 +148,14 @@ def generate_schedule():
                 assignment_details = item["raw_details"]
             else:
                 assignment_details = {
-                    'assignment_name': item.get("Assignment", "Untitled"),
-                    'work_sessions': 1,
-                    'assignment_type': item.get('Category', 'p_set'), 
-                    'field_of_study': survey_data.get('major', 'Business'),
-                    'external_resources': 'Google/internet',
-                    'work_location': 'School/library',
-                    'work_in_group': 'No',
-                    'submitted_in_person': 'No'
+                    "assignment_name": item.get("Assignment", "Untitled"),
+                    "work_sessions": 1,
+                    "assignment_type": item.get('Category', 'p_set'), 
+                    "field_of_study": survey_data.get('major', 'Business'),
+                    "external_resources": 'Google/internet',
+                    "work_location": 'School/library',
+                    "work_in_group": 'No',
+                    "submitted_in_person": 'No'
                 }
 
             predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
