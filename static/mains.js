@@ -196,8 +196,21 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         const formData = new FormData();
         formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
-        const pdfInput = document.getElementById('pdfUpload');
-        for(let i=0; i<pdfInput.files.length; i++) formData.append('pdfs', pdfInput.files[i]);
+        #const pdfInput = document.getElementById('pdfUpload');
+        #for(let i=0; i<pdfInput.files.length; i++) formData.append('pdfs', pdfInput.files[i]);
+        let pdfIndex = 0;
+        document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
+            const fileInput = row.querySelector('.pdf-file');
+            const nameInput = row.querySelector('.pdf-course-name');
+    
+            if (fileInput.files.length > 0) {
+                formData.append(`pdf_${pdfIndex}`, fileInput.files[0]);
+                // Use user input or fallback to "Unknown"
+                formData.append(`course_name_${pdfIndex}`, nameInput.value || "Unknown Course");
+                pdfIndex++;
+            }
+});
+formData.append('pdf_count', pdfIndex);
 
         const icsInput = document.getElementById('icsUpload');
         if(icsInput.files.length > 0) formData.append('ics', icsInput.files[0]);
