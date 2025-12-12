@@ -55,7 +55,6 @@ def resolve_time(row, schedule_map):
     return "23:59"
 
 # --- PARSING ENGINE ---
-# [FIX] Added manual_course_name argument here
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_name: str = None):
     active_key = api_key if api_key else DEFAULT_API_KEY
     if not active_key:
@@ -101,7 +100,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
         2. Times MUST be 24-hour format (HH:MM) if available. If not, null.
         """
 
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
         max_retries = 3
         response = None
@@ -128,15 +127,11 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
             print("❌ Failed to parse JSON response from Gemini")
             return None
 
-        # --- FIX: Handle List vs Dict Response ---
-        # If Gemini returned a plain list [ ... ], wrap it in a dict
         if isinstance(data, list):
             data = {"assignments": data, "metadata": {}}
         
-        # --- Process Metadata ---
         meta = data.get("metadata", {})
         
-        # [FIX] Override AI extracted name if manual name is provided
         ai_extracted_name = meta.get("course_name", "Unknown Course")
         course_name = manual_course_name if manual_course_name else ai_extracted_name
         
@@ -153,12 +148,10 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
                         if full_day.lower() in str(day).lower():
                             schedule_map[full_day] = std_time
 
-        # --- Process Assignments ---
         rows = []
-        # Now .get() is safe because we ensured data is a dict
         for item in data.get("assignments", []):
             rows.append({
-                "Course": course_name, # Uses the manual name if provided
+                "Course": course_name, 
                 "Date": item.get("date"),
                 "Time": item.get("time"), 
                 "Category": item.get("category", "Other"),
@@ -173,6 +166,12 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
         df = df.dropna(subset=['Date'])
         
         df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
+
+        # --- NEW: Append Course Name to Assignment Name ---
+        # Format: "Assignment Name (Course Name)"
+        df['Assignment'] = df.apply(
+            lambda row: f"{row['Assignment']} ({row['Course']})", axis=1
+        )
 
         return df
 
