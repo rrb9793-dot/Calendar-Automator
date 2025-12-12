@@ -153,8 +153,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         rows = []
         for item in data.get("assignments", []):
             rows.append({
-                # PRIORITIZE MANUAL NAME
-                "Course": manual_course_name if manual_course_name else course_name_ai, 
+                "Course": course_name,
                 "Date": item.get("date"),
                 "Time": item.get("time"), 
                 "Category": item.get("category", "Other"),
