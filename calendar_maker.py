@@ -47,14 +47,15 @@ def parse_request_inputs(json_data):
             "name": "assignment_name",
             "due_date": "due_dates",
             "time_estimate": "time_spent_hours",
-            "sessions_needed": "sessions_needed" # <--- Added Mapping
+            "sessions_needed": "sessions_needed"
         }
         df_assignments.rename(columns=column_map, inplace=True)
         
-        # --- FIX: Handle Mixed Date Formats (ISO + AM/PM) ---
+        # --- FIX APPLIED HERE ---
+        # Added format='mixed' to handle "11:59 PM" and other formats gracefully
         if "due_dates" in df_assignments.columns:
             df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed', errors='coerce')
-            # Drop invalid dates to prevent crashes
+            # Drop any rows where the date couldn't be parsed (NaT)
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
         if "time_spent_hours" in df_assignments.columns:
@@ -118,7 +119,6 @@ def parse_ics_bytes(ics_content_bytes: bytes, local_tz: ZoneInfo, horizon_start:
     if not records: return pd.DataFrame(columns=columns)
     return pd.DataFrame(records).sort_values("start").reset_index(drop=True)
 
-# ... (Helper math functions: clip, merge, subtract, buffer, build_free_blocks kept as is) ...
 def clip_blocks_to_horizon(blocks, horizon_start, horizon_end):
     clipped = []
     for start, end in blocks:
