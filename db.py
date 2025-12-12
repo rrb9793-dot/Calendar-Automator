@@ -21,7 +21,7 @@ def get_user_preferences(email):
     if not conn: return None
     try:
         cur = conn.cursor()
-        # UPDATED: Case-insensitive search
+        # Case-insensitive search
         query = """
             SELECT year, timezone, major, second_concentration, minor,
                    weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
@@ -34,7 +34,6 @@ def get_user_preferences(email):
         conn.close()
 
         if row:
-            # Return as a dictionary so the frontend can use it
             return {
                 "year": row[0],
                 "timezone": row[1],
@@ -53,7 +52,6 @@ def get_user_preferences(email):
 
 # --- SAVE USER PREFERENCES ---
 def save_user_preferences(survey, prefs):
-    """Saves student info to the 'user_preferences' table."""
     conn = get_db_connection()
     if not conn: return
 
@@ -61,7 +59,6 @@ def save_user_preferences(survey, prefs):
         cur = conn.cursor()
         print(f"📝 Saving Preferences for: {survey.get('email')}")
 
-        # Using 'second_concentration' (underscore) to match your DB schema
         query = """
             INSERT INTO user_preferences (
                 email, timezone, year, major, second_concentration, minor,
@@ -102,14 +99,12 @@ def save_user_preferences(survey, prefs):
 
 # --- SAVE ASSIGNMENT ---
 def save_assignment(email, course_data, predicted_hours=0):
-    """Saves a single assignment to the 'assignments' table."""
     conn = get_db_connection()
     if not conn: return
 
     try:
         cur = conn.cursor()
         
-        # Convert "Yes"/"No" to Boolean for Postgres
         is_group = True if course_data.get('work_in_group') == "Yes" else False
         is_person = True if course_data.get('submitted_in_person') == "Yes" else False
         
