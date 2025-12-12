@@ -1,18 +1,60 @@
 import os
-import time
+import json
 import pandas as pd
+import pypdf
 import re
-from typing import List, Optional
-from datetime import datetime
-from pydantic import BaseModel, Field
-#import google.generativeai as genai
-#from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI
-
 
 # --- CONFIGURATION ---
 #API_KEY = os.environ.get("GEMINI_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# ==========================================
+# 1. PARSING PROMPT
+# ==========================================
+SYLLABUS_PARSING_PROMPT = """
+Extract syllabus data into JSON format.
+    
+Structure:
+{
+    "metadata": {
+        "course_name": "string",
+        "class_meetings": [
+            {"days": ["Monday"], "start_time": "11:00 AM"}
+        ]
+    },
+    "assignments": [
+        {
+            "date": "YYYY-MM-DD",
+            "time": "11:59 PM", 
+            "assignment_name": "string",
+            "category": "Exam/Reading/Project/Other",
+            "description": "string"
+        }
+    ]
+}
+    
+Rules:
+- Dates must be YYYY-MM-DD.
+- If no time is listed, use null.
+- Capture all exams and due dates.
+"""
+
+# ==========================================
+# 2. HELPER FUNCTIONS
+# ==========================================
+def extract_text_from_pdf(pdf_path):
+    """
+    Extracts raw text from a PDF file for OpenAI processing.
+    """
+    try:
+        reader = pypdf.PdfReader(pdf_path)
+        text = []
+        for page in reader.pages:
+            text.append(page.extract_text() or "")
+        return "\n".join(text)
+    except Exception as e:
+        print(f"Error reading PDF: {e}")
+        return ""
 
 # --- HELPER: STRICT STANDARDIZATION ---
 def standardize_time(time_str):
@@ -44,96 +86,39 @@ def resolve_time(row, schedule_map):
     return "11:59 PM"
 
 # --- PARSING ENGINE ---
-def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
-    # Resolve Key
-    active_key = api_key if api_key else API_KEY
-    if not active_key:
-        print("❌ Error: No API Key found. Set GEMINI_API_KEY in Railway Variables.")
+def parse_syllabus_to_data(pdf_path, api_key):
+    """
+    Main function called by index.py to process a syllabus PDF.
+    """
+    client = OpenAI(api_key=api_key)
+
+    # A. Extract Text (OpenAI needs text input)
+    raw_text = extract_text_from_pdf(pdf_path)
+    if not raw_text.strip():
+        print(f"❌ Error: No text found in {pdf_path}")
         return None
 
-    # Configure the Stable SDK
-    genai.configure(api_key=active_key)
-    print(f"Reading {pdf_path}...")
-
     try:
-        # Upload File
-        sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
-        
-        # Wait for processing
-        # Increased sleep to 2s to reduce API call frequency
-        while sample_file.state.name == "PROCESSING":
-            time.sleep(2)
-            sample_file = genai.get_file(sample_file.name)
-            
-        if sample_file.state.name != "ACTIVE":
-            print(f"❌ File processing failed: {sample_file.state.name}")
-            return None
+        # B. Send to OpenAI
+        response = client.chat.completions.create(
+            model="gpt-4o",  # Switch to "gpt-4o-mini" if you want to save cost
+            messages=[
+                {"role": "system", "content": SYLLABUS_PARSING_PROMPT},
+                {"role": "user", "content": f"Syllabus Text:\n{raw_text}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1
+        )
 
-        prompt = """
-        Extract syllabus data into JSON format.
-        
-        Structure:
-        {
-            "metadata": {
-                "course_name": "string",
-                "class_meetings": [
-                    {"days": ["Monday"], "start_time": "11:00 AM"}
-                ]
-            },
-            "assignments": [
-                {
-                    "date": "YYYY-MM-DD",
-                    "time": "11:59 PM", 
-                    "assignment_name": "string",
-                    "category": "Exam/Reading/Project/Other",
-                    "description": "string"
-                }
-            ]
-        }
-        
-        Rules:
-        - Dates must be YYYY-MM-DD.
-        - If no time is listed, use null.
-        - Capture all exams and due dates.
-        """
-
-        # --- CHANGED: Using 1.5 Flash for better rate limit stability ---
-        model = genai.GenerativeModel('gemini-2.0-flash')
-
-        # --- ADDED: Retry Logic for 429 Errors ---
-        max_retries = 5
-        base_delay = 5
-        response = None
-
-        for attempt in range(max_retries):
-            try:
-                response = model.generate_content(
-                    [sample_file, prompt],
-                    generation_config={"response_mime_type": "application/json"}
-                )
-                break # Success, exit loop
-            except Exception as e:
-                # Check for "429" or "Resource Exhausted"
-                if "429" in str(e) or "resource exhausted" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        wait_time = base_delay * (2 ** attempt) # 5, 10, 20...
-                        print(f"⚠️ Rate limit hit (429). Retrying in {wait_time} seconds...")
-                        time.sleep(wait_time)
-                        continue
-                print(f"❌ Error generating content: {e}")
-                return None
-        
-        if not response:
-            return None
-
-        import json
+        # C. Parse JSON Response
+        content = response.choices[0].message.content
         try:
-            data = json.loads(response.text)
+            data = json.loads(content)
         except Exception as e:
             print(f"❌ JSON Parse Error: {e}")
             return None
 
-        # --- Process Metadata ---
+        # --- D. Process Metadata (Your Custom Logic) ---
         meta = data.get("metadata", {})
         course_name = meta.get("course_name", "Unknown Course")
         meetings = meta.get("class_meetings", [])
@@ -151,7 +136,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                     if full_day.lower() in str(day).lower():
                         schedule_map[full_day] = std_time
 
-        # --- Process Assignments ---
+        # --- E. Process Assignments (Your Custom Logic) ---
         rows = []
         for item in data.get("assignments", []):
             rows.append({
@@ -165,8 +150,11 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
             
         df = pd.DataFrame(rows)
         if not df.empty:
+            # Standardize Dates
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
             df = df.dropna(subset=['Date'])
+            
+            # Resolve Times using the schedule map
             df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
 
         return df
@@ -174,6 +162,8 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
     except Exception as e:
         print(f"❌ Error analyzing {pdf_path}: {e}")
         return None
+
+
 
 # --- CONSOLIDATION ---
 def consolidate_assignments(df):
