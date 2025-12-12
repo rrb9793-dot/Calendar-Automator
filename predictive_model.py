@@ -5,13 +5,36 @@ import joblib
 from sklearn.linear_model import ElasticNet
 
 # --- CONFIGURATION ---
-# Uses the directory of this script to find survey.csv
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, 'survey.csv')
 
 model = None
-model_columns = []
 
+# STRICT COLUMN DEFINITION
+# These are the exact columns your model was trained on.
+MODEL_COLUMNS = [
+    'work_sessions',
+    'year_2027', 'year_2028', 'year_2029',
+    'major_category_business', 'major_category_engineering', 'major_category_math', 
+    'major_category_natural_sciences', 'major_category_social_sciences_law', 'major_category_tech_data',
+    'second_concentration_category_health_education', 'second_concentration_category_math', 
+    'second_concentration_category_tech_data',
+    'minor_category_business', 'minor_category_math', 'minor_category_natural_sciences', 
+    'minor_category_social_sciences_law', 'minor_category_tech_data',
+    'field_of_study_category_business', 'field_of_study_category_math', 
+    'field_of_study_category_natural_sciences', 'field_of_study_category_social_sciences_law', 
+    'field_of_study_category_tech_data',
+    'assignment_type_coding', 'assignment_type_discussion', 'assignment_type_essay', 
+    'assignment_type_modeling', 'assignment_type_p_set', 'assignment_type_presentation', 
+    'assignment_type_readings', 'assignment_type_research_paper',
+    'external_resources_class_materials', 'external_resources_google',
+    'work_location_public', 'work_location_school',
+    'worked_in_group_Yes', 'submitted_in_person_Yes'
+]
+
+# ==========================================
+# PART 1: TRAINING (Strictly uses survey.csv)
+# ==========================================
 if os.path.exists(CSV_PATH):
     try:
         # Load Data
@@ -104,6 +127,11 @@ if os.path.exists(CSV_PATH):
             X = survey_df.drop('time_spent_hours', axis=1)
             y = survey_df['time_spent_hours']
 
+            # Ensure we strictly use the MODEL_COLUMNS (if they exist in survey data)
+            # This prevents training on junk columns if the CSV changes
+            available_cols = [c for c in MODEL_COLUMNS if c in X.columns]
+            X = X[available_cols]
+
             model = ElasticNet(alpha=0.078, l1_ratio=0.95, max_iter=5000)
             model.fit(X, y)
 
@@ -115,3 +143,104 @@ if os.path.exists(CSV_PATH):
         print(f"❌ Error training model: {e}")
 else:
     print(f"❌ Error: {CSV_PATH} not found.")
+
+
+# ==========================================
+# PART 2: FRONTEND MAPPING (Strictly for Prediction)
+# ==========================================
+def predict_assignment_time(user_profile, assignment_details):
+    """
+    1. Accepts raw frontend strings.
+    2. Maps them to the categories used in training.
+    3. One-hot encodes them into the exact MODEL_COLUMNS structure.
+    4. Returns predicted hours.
+    """
+    if model is None:
+        return 2.0 # Fallback default
+
+    # A. Map Frontend Options -> Model Internal Categories
+    FRONTEND_MAP = {
+        # Majors / Fields
+        "Business": "business",
+        "Tech & Data Science": "tech_data",
+        "Engineering": "engineering",
+        "Math": "math",
+        "Natural Sciences": "natural_sciences",
+        "Social Sciences": "social_sciences_law",
+        "Arts & Humanities": "arts_humanities",
+        "Health & Education": "health_education",
+        
+        # Assignment Types
+        "Problem Set": "p_set",
+        "Coding Assignment": "coding",
+        "Research Paper": "research_paper",
+        "Creative Writing/Essay": "essay",
+        "Presentation": "presentation",
+        "Modeling": "modeling",
+        "Discussion Post": "discussion",
+        "Readings": "readings",
+        "Case Study": "case_study",
+        
+        # Resources
+        "Textbook / class materials": "class_materials",
+        "Google/internet": "google",
+        "AI / Chatgpt": "ai",
+        
+        # Locations
+        "At home/private setting": "home",
+        "School/library": "school",
+        "Other public setting (cafe, etc.)": "public",
+        
+        # Boolean Checkboxes
+        "Yes": "Yes",
+        "No": "No"
+    }
+
+    # B. Initialize Empty Vector with EXACT MODEL COLUMNS
+    input_vector = {col: 0 for col in MODEL_COLUMNS}
+
+    # C. Helper to flip the specific 1-hot bit
+    def set_feature(prefix, raw_value):
+        mapped_val = FRONTEND_MAP.get(raw_value)
+        if mapped_val:
+            col_name = f"{prefix}_{mapped_val}"
+            # Only set if it exists in our strict model definition
+            if col_name in input_vector:
+                input_vector[col_name] = 1
+    
+    # D. Populate Features from Input
+    # 1. Continuous Variables
+    try:
+        ws = int(assignment_details.get('work_sessions', 1))
+        input_vector['work_sessions'] = ws
+    except:
+        input_vector['work_sessions'] = 1
+
+    # 2. Categorical Variables (User Profile)
+    year_val = user_profile.get('year') # e.g., "2027"
+    if f"year_{year_val}" in input_vector:
+        input_vector[f"year_{year_val}"] = 1
+        
+    set_feature('major_category', user_profile.get('major'))
+    set_feature('second_concentration_category', user_profile.get('second_concentration'))
+    set_feature('minor_category', user_profile.get('minor'))
+    
+    # 3. Categorical Variables (Assignment Specifics)
+    set_feature('field_of_study_category', assignment_details.get('field_of_study'))
+    set_feature('assignment_type', assignment_details.get('assignment_type'))
+    set_feature('external_resources', assignment_details.get('external_resources'))
+    set_feature('work_location', assignment_details.get('work_location'))
+    set_feature('worked_in_group', assignment_details.get('work_in_group'))
+    set_feature('submitted_in_person', assignment_details.get('submitted_in_person'))
+
+    # E. Convert to DataFrame
+    input_df = pd.DataFrame([input_vector])
+    
+    # F. ENFORCE INT64 FOR WORK SESSIONS
+    input_df['work_sessions'] = input_df['work_sessions'].astype('int64')
+
+    # Ensure correct column order matches MODEL_COLUMNS exactly
+    input_df = input_df[MODEL_COLUMNS]
+
+    prediction = model.predict(input_df)[0]
+    return round(max(0.5, prediction), 2)
