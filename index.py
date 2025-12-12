@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
+import google.generativeai as genai
 
 # --- CUSTOM MODULES ---
 import predictive_model 
