@@ -1,39 +1,24 @@
 import os
 import psycopg2
-from urllib.parse import urlparse
 
 # --- DATABASE CONFIGURATION ---
-# 1. Try to get the automatic Railway URL first (Best Practice)
+# We ONLY look for the Railway variable. No more hardcoded fallbacks.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# 2. Fallback credentials (only used if DATABASE_URL is missing)
-DB_NAME = "railway"
-DB_USER = "postgres"
-DB_PASSWORD = "KabjEWZlzLUmdxXWUTBSiQgQkcJUvNFC"
-DB_HOST = "postgres.railway.internal"
-DB_PORT = "5432"
-
 def get_db_connection():
-    """Establishes a connection to the database using the best available method."""
     try:
-        if DATABASE_URL:
-            # Connect using the secure Railway Variable
-            return psycopg2.connect(DATABASE_URL)
-        else:
-            # Fallback for local testing (often fails on deployment if not configured)
-            return psycopg2.connect(
-                dbname=DB_NAME,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                host=DB_HOST,
-                port=DB_PORT
-            )
+        if not DATABASE_URL:
+            print("❌ CRITICAL ERROR: DATABASE_URL environment variable is missing!")
+            print("   -> Did you add it to the Python Service variables?")
+            print("   -> Did you click 'Redeploy' after adding it?")
+            return None
+            
+        return psycopg2.connect(DATABASE_URL)
     except Exception as e:
-        print(f"❌ FATAL: Could not connect to DB. Check DATABASE_URL. Error: {e}")
+        print(f"❌ DATABASE CONNECTION FAILED: {e}")
         return None
 
 def save_student_profile(survey, prefs):
-    """Saves student info. Updates existing users if email matches."""
     conn = get_db_connection()
     if not conn: return
 
@@ -41,8 +26,7 @@ def save_student_profile(survey, prefs):
         cur = conn.cursor()
         print(f"📝 Saving Profile for: {survey.get('email')}")
 
-        # Note: If your DB column actually has a space ("second concentration"), 
-        # change second_concentration to "second concentration" (with quotes) below.
+        # NOTE: Ensure column name matches your DB ("second_concentration" vs "second concentration")
         query = """
             INSERT INTO students (
                 email, timezone, year, major, second_concentration, minor,
@@ -82,14 +66,13 @@ def save_student_profile(survey, prefs):
         if conn: conn.rollback()
 
 def save_assignment(email, course_data, predicted_hours=0):
-    """Saves a single assignment linked to the student."""
     conn = get_db_connection()
     if not conn: return
 
     try:
         cur = conn.cursor()
         
-        # Convert Yes/No strings to Python Booleans
+        # Convert "Yes"/"No" to Boolean
         is_group = True if course_data.get('work_in_group') == "Yes" else False
         is_person = True if course_data.get('submitted_in_person') == "Yes" else False
         
