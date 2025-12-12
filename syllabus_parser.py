@@ -101,8 +101,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         model = genai.GenerativeModel('gemini-2.0-flash')
 
         # --- ADDED: Retry Logic for 429 Errors ---
-        max_retries = 5
-        base_delay = 5
+        max_retries = 3
         response = None
 
         for attempt in range(max_retries):
@@ -116,9 +115,8 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                 # Check for "429" or "Resource Exhausted"
                 if "429" in str(e) or "resource exhausted" in str(e).lower():
                     if attempt < max_retries - 1:
-                        wait_time = base_delay * (2 ** attempt) # 5, 10, 20...
                         print(f"⚠️ Rate limit hit (429). Retrying in {wait_time} seconds...")
-                        time.sleep(wait_time)
+                        time.sleep(5)
                         continue
                 print(f"❌ Error generating content: {e}")
                 return None
