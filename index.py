@@ -52,12 +52,12 @@ def generate_schedule():
         req_data = json.loads(data_str) if data_str else {}
         
         frontend_prefs = req_data.get('preferences', {})
-        # Survey data is here if you need it later: req_data.get('survey', {})
+        survey_data = req_data.get('survey', {})
+        manual_courses = req_data.get('courses', [])
 
         # B. User ICS Files
         ics_files_bytes = []
         if 'ics' in request.files:
-            # Handle multiple files or single file under key 'ics'
             files = request.files.getlist('ics')
             for f in files:
                 if f.filename != '':
@@ -65,11 +65,23 @@ def generate_schedule():
                     f.seek(0)
 
         # ---------------------------------------------------------
-        # 2. PDF PARSING
+        # 2. AGGREGATE ASSIGNMENTS (MANUAL + PDF)
         # ---------------------------------------------------------
-        assignments_list = []
-        uploaded_pdfs = request.files.getlist('pdfs')
+        all_assignments = []
         
+        # A. Manual Entries (From Frontend)
+        for course in manual_courses:
+            all_assignments.append({
+                "source_type": "manual",
+                "Assignment": course.get('assignment_name'),
+                "Date": course.get('due_date'),
+                "Time": "23:59", 
+                "Course": course.get('field_of_study', 'General'),
+                "raw_details": course # Frontend inputs
+            })
+
+        # B. PDF Entries (From Parsing)
+        uploaded_pdfs = request.files.getlist('pdfs')
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
             pdf_dfs = []
@@ -79,24 +91,64 @@ def generate_schedule():
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 
-                # Parse using the new parser code
-                # Passes GEMINI_API_KEY from env, or parser falls back to hardcoded one
                 df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
-                
                 if df is not None and not df.empty:
                     pdf_dfs.append(df)
             
-            # Consolidate all parsed dataframes
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
                 final_df = syllabus_parser.consolidate_assignments(master_df)
                 parsed_records = final_df.to_dict(orient='records')
-                assignments_list.extend(parsed_records)
+                
+                for record in parsed_records:
+                    record["source_type"] = "pdf"
+                    all_assignments.append(record)
 
         # ---------------------------------------------------------
-        # 3. PREPARE & RUN CALENDAR MAKER
+        # 3. PREDICTION & FORMATTING
         # ---------------------------------------------------------
-        # Set default hours if frontend keys are missing
+        formatted_assignments = []
+        
+        for i, item in enumerate(all_assignments):
+            # A. Prepare details for prediction
+            if item["source_type"] == "manual":
+                # Manual entries have full user details
+                assignment_details = item["raw_details"]
+            else:
+                # PDF entries need defaults for fields the PDF lacks
+                assignment_details = {
+                    'work_sessions': 1,
+                    'assignment_type': item.get('Category', 'p_set'), 
+                    'field_of_study': survey_data.get('major', 'Business'),
+                    'external_resources': 'Google/internet',
+                    'work_location': 'School/library',
+                    'work_in_group': 'No',
+                    'submitted_in_person': 'No'
+                }
+
+            # B. Run Prediction (Using strict mapping)
+            predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
+            
+            # C. Format Date/Time
+            date_str = item.get("Date")
+            time_str = item.get("Time")
+            if not time_str: time_str = "11:59 PM"
+            full_due_string = f"{date_str} {time_str}"
+            
+            # D. Final Structure for Calendar Maker
+            formatted_assignments.append({
+                "id": f"assign_{i}",
+                "name": item.get("Assignment", "Untitled Task"),
+                "class_name": item.get("Course", "General"),
+                "due_date": full_due_string, 
+                "time_estimate": float(predicted_hours), 
+                "sessions_needed": int(assignment_details.get('work_sessions', 1)),
+                "assignment_type": assignment_details.get('assignment_type', 'p_set')
+            })
+
+        # ---------------------------------------------------------
+        # 4. CALENDAR GENERATION
+        # ---------------------------------------------------------
         backend_preferences = {
             "timezone": "America/New_York",
             "work_windows": {
@@ -106,28 +158,6 @@ def generate_schedule():
                 "weekend_end_hour": float(frontend_prefs.get('weekendEnd', '20:00').split(':')[0])
             }
         }
-
-        formatted_assignments = []
-        for i, item in enumerate(assignments_list):
-            # --- DATE/TIME FIX APPLIED HERE ---
-            date_str = item.get("Date")
-            time_str = item.get("Time")
-            
-            # Default to 11:59 PM if parser returned None for time
-            if not time_str:
-                time_str = "11:59 PM"
-            
-            # Combine them so calendar_maker gets a full timestamp
-            full_due_string = f"{date_str} {time_str}"
-            
-            formatted_assignments.append({
-                "id": f"assign_{i}",
-                "name": item.get("Assignment", "Untitled Task"),
-                "class_name": item.get("Course", "General"),
-                "due_date": full_due_string, 
-                "time_estimate": 2.0, 
-                "assignment_type": item.get("Category", "p_set")
-            })
 
         calendar_input_data = {
             "user_preferences": backend_preferences,
@@ -151,7 +181,6 @@ def generate_schedule():
 
     except Exception as e:
         print(f"API Error: {e}")
-        # Helpful for debugging: print the full traceback in logs if needed
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
