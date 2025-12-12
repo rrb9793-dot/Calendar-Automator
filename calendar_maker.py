@@ -53,7 +53,7 @@ def parse_request_inputs(json_data):
         
         # Ensure correct types
         if "due_dates" in df_assignments.columns:
-            df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed')
+            df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"])
         
         if "time_spent_hours" in df_assignments.columns:
             df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"])
