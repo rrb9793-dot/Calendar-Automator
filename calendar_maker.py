@@ -51,9 +51,11 @@ def parse_request_inputs(json_data):
         }
         df_assignments.rename(columns=column_map, inplace=True)
         
-        # Ensure correct types
+        # --- FIX: Handle Mixed Date Formats (ISO + AM/PM) ---
         if "due_dates" in df_assignments.columns:
-            df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"])
+            df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed', errors='coerce')
+            # Drop invalid dates to prevent crashes
+            df_assignments = df_assignments.dropna(subset=['due_dates'])
         
         if "time_spent_hours" in df_assignments.columns:
             df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"])
