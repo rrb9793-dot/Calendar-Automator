@@ -5,11 +5,14 @@ import re
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+#import google.generativeai as genai
+#from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from openai import OpenAI
+
 
 # --- CONFIGURATION ---
-API_KEY = os.environ.get("GEMINI_API_KEY")
+#API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # --- HELPER: STRICT STANDARDIZATION ---
 def standardize_time(time_str):
