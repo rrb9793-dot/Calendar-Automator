@@ -179,14 +179,32 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
 
         if (response.ok) {
             btn.textContent = "DONE";
+            const resultArea = document.getElementById('resultArea');
+            const downloadLink = document.getElementById('downloadLink');
+            const predictionList = document.getElementById('predictionList'); // Get the new container
+
+            resultArea.style.display = 'block';
+
+            // --- RENDER PREDICTED TIMES ---
+            if (result.assignments && result.assignments.length > 0) {
+                let html = '<div class="prediction-header"><h5>Calculated Workloads</h5></div>';
+                result.assignments.forEach(task => {
+                    html += `
+                        <div class="prediction-row">
+                            <span class="p-name">${task.name}</span>
+                            <span class="p-time">${task.time_estimate} hours</span>
+                        </div>
+                    `;
+                });
+                predictionList.innerHTML = html;
+            }
+            // -----------------------------
+
             if (result.ics_url) {
-                const resultArea = document.getElementById('resultArea');
-                const downloadLink = document.getElementById('downloadLink');
-                resultArea.style.display = 'block';
                 downloadLink.href = result.ics_url;
                 downloadLink.download = "My_Study_Schedule.ics";
-                resultArea.scrollIntoView({ behavior: 'smooth' });
             }
+            resultArea.scrollIntoView({ behavior: 'smooth' });
         } else {
             alert("Error: " + (result.error || "Unknown"));
         }
