@@ -7,14 +7,53 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def get_db_connection():
     try:
         if not DATABASE_URL:
-            print("❌ CRITICAL ERROR: DATABASE_URL is missing!")
+            print("❌ CRITICAL ERROR: DATABASE_URL is missing! Check Railway Variables.")
             return None
         return psycopg2.connect(DATABASE_URL)
     except Exception as e:
         print(f"❌ DATABASE CONNECTION FAILED: {e}")
         return None
 
+# --- FETCH USER PREFERENCES (FOR AUTOFILL) ---
+def get_user_preferences(email):
+    """Fetches a user's saved settings to autofill the frontend."""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        cur = conn.cursor()
+        # Fetching the user's saved settings
+        query = """
+            SELECT year, timezone, major, second_concentration, minor,
+                   weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
+            FROM user_preferences
+            WHERE email = %s;
+        """
+        cur.execute(query, (email,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if row:
+            # Return as a dictionary so the frontend can use it
+            return {
+                "year": row[0],
+                "timezone": row[1],
+                "major": row[2],
+                "second_concentration": row[3],
+                "minor": row[4],
+                "weekdayStart": row[5],
+                "weekdayEnd": row[6],
+                "weekendStart": row[7],
+                "weekendEnd": row[8]
+            }
+        return None
+    except Exception as e:
+        print(f"❌ Error fetching preferences: {e}")
+        return None
+
+# --- SAVE USER PREFERENCES ---
 def save_user_preferences(survey, prefs):
+    """Saves student info to the 'user_preferences' table."""
     conn = get_db_connection()
     if not conn: return
 
@@ -22,8 +61,7 @@ def save_user_preferences(survey, prefs):
         cur = conn.cursor()
         print(f"📝 Saving Preferences for: {survey.get('email')}")
 
-        # --- THE FIX IS HERE ---
-        # We use strictly 'second_concentration' (no quotes, no spaces)
+        # Using 'second_concentration' (underscore) to match your DB schema
         query = """
             INSERT INTO user_preferences (
                 email, timezone, year, major, second_concentration, minor,
@@ -60,16 +98,18 @@ def save_user_preferences(survey, prefs):
 
     except Exception as e:
         print(f"❌ ERROR SAVING PREFERENCES: {e}")
-        # Debug helper: Prints exactly what column names Python thinks it's sending
         if conn: conn.rollback()
 
+# --- SAVE ASSIGNMENT ---
 def save_assignment(email, course_data, predicted_hours=0):
+    """Saves a single assignment to the 'assignments' table."""
     conn = get_db_connection()
     if not conn: return
 
     try:
         cur = conn.cursor()
         
+        # Convert "Yes"/"No" to Boolean for Postgres
         is_group = True if course_data.get('work_in_group') == "Yes" else False
         is_person = True if course_data.get('submitted_in_person') == "Yes" else False
         
