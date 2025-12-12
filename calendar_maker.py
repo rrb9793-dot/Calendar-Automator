@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 from icalendar import Calendar, Event
 import recurring_ical_events
-from collections import defaultdict  # <--- Added missing import
+from collections import defaultdict
 
 # ==========================================================
 # BLOCK 1 & 2: INPUT PARSER
@@ -14,11 +14,11 @@ from collections import defaultdict  # <--- Added missing import
 def parse_request_inputs(json_data):
     # 1. TIMEZONE & WORK WINDOWS
     user_prefs = json_data.get("user_preferences", {})
-    user_tz_str = user_prefs.get("timezone", "America/New_York") # Default to NY
+    user_tz_str = user_prefs.get("timezone", "America/New_York") 
     try:
         local_tz = ZoneInfo(user_tz_str)
     except:
-        local_tz = ZoneInfo("UTC")
+        local_tz = ZoneInfo("America/New_York")
 
     ww = user_prefs.get("work_windows", {})
     work_windows = {}
@@ -46,18 +46,25 @@ def parse_request_inputs(json_data):
             "id": "assignment_id",
             "name": "assignment_name",
             "due_date": "due_dates",
-            "time_estimate": "time_spent_hours"
+            "time_estimate": "time_spent_hours",
+            "sessions_needed": "sessions_needed" # <--- Added Mapping
         }
         df_assignments.rename(columns=column_map, inplace=True)
         
         # Ensure correct types
         if "due_dates" in df_assignments.columns:
             df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"])
+        
         if "time_spent_hours" in df_assignments.columns:
             df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"])
         else:
-            # Fallback if no time estimate provided
             df_assignments["time_spent_hours"] = 2.0 
+
+        if "sessions_needed" not in df_assignments.columns:
+            df_assignments["sessions_needed"] = 1
+        else:
+            df_assignments["sessions_needed"] = pd.to_numeric(df_assignments["sessions_needed"], errors='coerce').fillna(1).astype(int)
+
     else:
         df_assignments = pd.DataFrame()
 
@@ -238,12 +245,23 @@ def generate_sessions_from_assignments(df_assignments, default_session_minutes=6
     if df_assignments.empty: return sessions
 
     for _, row in df_assignments.iterrows():
-        total_time = row.get("time_spent_hours", 2.0) * 60
-        num_sessions = math.ceil(total_time / default_session_minutes)
-        if num_sessions == 0: continue
+        total_hours = row.get("time_spent_hours", 2.0)
+        total_time_mins = total_hours * 60
+        
+        # --- LOGIC UPDATED TO RESPECT 'work sessions' INPUT ---
+        explicit_sessions = row.get("sessions_needed", 1)
+        if explicit_sessions > 1:
+            num_sessions = int(explicit_sessions)
+        else:
+            # Fallback to pure time-based calc if they said 1 session or didn't specify
+            # But if total time is huge, force split
+            num_sessions = math.ceil(total_time_mins / default_session_minutes)
+        
+        # Avoid division by zero
+        num_sessions = max(1, num_sessions)
 
-        base_duration = int(total_time // num_sessions)
-        remainder = int(total_time % num_sessions)
+        base_duration = int(total_time_mins // num_sessions)
+        remainder = int(total_time_mins % num_sessions)
 
         for i in range(num_sessions):
             dur = base_duration + (1 if i < remainder else 0)
@@ -308,7 +326,7 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions, max_hours_per_day
     return scheduled, unscheduled
 
 # ==========================================================
-# BLOCK 6: OUTPUT GENERATOR (New)
+# BLOCK 6: OUTPUT GENERATOR
 # ==========================================================
 def create_output_ics(scheduled_tasks, output_path):
     cal = Calendar()
@@ -317,8 +335,6 @@ def create_output_ics(scheduled_tasks, output_path):
 
     for task in scheduled_tasks:
         event = Event()
-        
-        # Parse ISO strings if needed, but they should be datetime objects from internal logic
         start = task['start']
         end = task['end']
         
