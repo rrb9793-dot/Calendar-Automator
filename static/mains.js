@@ -136,6 +136,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
         };
 
         const preferences = {
+            timezone: document.getElementById('timezone').value, // <--- ADDED TIMEZONE
             weekdayStart: getPickerValue('weekdayStart'),
             weekdayEnd: getPickerValue('weekdayEnd'),
             weekendStart: getPickerValue('weekendStart'),
@@ -181,11 +182,10 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
             btn.textContent = "DONE";
             const resultArea = document.getElementById('resultArea');
             const downloadLink = document.getElementById('downloadLink');
-            const predictionList = document.getElementById('predictionList'); // Get the new container
+            const predictionList = document.getElementById('predictionList');
 
             resultArea.style.display = 'block';
 
-            // --- RENDER PREDICTED TIMES ---
             if (result.assignments && result.assignments.length > 0) {
                 let html = '<div class="prediction-header"><h5>Calculated Workloads</h5></div>';
                 result.assignments.forEach(task => {
@@ -198,7 +198,6 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
                 });
                 predictionList.innerHTML = html;
             }
-            // -----------------------------
 
             if (result.ics_url) {
                 downloadLink.href = result.ics_url;
