@@ -27,7 +27,7 @@ def save_user_preferences(survey, prefs):
         # We use double quotes "second concentration" just in case your column has a space.
         query = """
             INSERT INTO user_preferences (
-                email, timezone, year, major, "second concentration", minor,
+                email, timezone, year, major, "second_concentration", minor,
                 weekday_start_hour, weekday_end_hour, weekend_start_hour, weekend_end_hour
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (email) DO UPDATE SET
