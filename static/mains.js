@@ -119,6 +119,37 @@ function addAssignmentRow() {
     assignmentsContainer.appendChild(div);
 }
 document.getElementById('addAssignmentBtn').addEventListener('click', addAssignmentRow);
+// --- ADD THIS FUNCTION ---
+const pdfContainer = document.getElementById('pdfContainer');
+
+function addPdfRow() {
+    const div = document.createElement('div');
+    div.className = 'syllabus-row'; 
+    div.style.gridTemplateColumns = "1fr 1fr 50px"; 
+    
+    div.innerHTML = `
+        <div>
+            <label style="font-size:0.7rem;">Course Name</label>
+            <input type="text" class="pdf-course-name" placeholder="e.g. Quantum Mechanics">
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Syllabus PDF</label>
+            <input type="file" class="pdf-file" accept=".pdf">
+        </div>
+        <div style="text-align:right; display:flex; align-items:end; justify-content:end;">
+            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">X</button>
+        </div>
+    `;
+    pdfContainer.appendChild(div);
+}
+
+document.getElementById('addPdfBtn').addEventListener('click', addPdfRow);
+
+// OPTIONAL: Add one empty row on load
+document.addEventListener('DOMContentLoaded', () => {
+    // ... existing code ...
+    addPdfRow(); // <--- Add this
+});
 
 // --- SUBMIT ---
 document.getElementById('submitBtn').addEventListener('click', async () => {
