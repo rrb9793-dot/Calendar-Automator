@@ -176,7 +176,8 @@ def generate_schedule():
             'stats': {
                 'scheduled': result['scheduled_count'],
                 'unscheduled': result['unscheduled_count']
-            }
+            },
+            'assignments': formatted_assignments # <--- NEW: SENDING PREDICTIONS BACK
         })
 
     except Exception as e:
