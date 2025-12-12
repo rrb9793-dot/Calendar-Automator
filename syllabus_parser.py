@@ -2,67 +2,73 @@ import os
 import time
 import pandas as pd
 import re
-from typing import List, Optional
+import json
 from datetime import datetime
-from pydantic import BaseModel, Field
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-
+from google.api_core.exceptions import ResourceExhausted
 
 # --- CONFIGURATION ---
-API_KEY = os.environ.get("GEMINI_API_KEY")
+DEFAULT_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-
-# --- HELPER: STRICT STANDARDIZATION ---
+# --- HELPER: STRICT STANDARDIZATION (24-HOUR FORMAT) ---
 def standardize_time(time_str):
+    """Converts various time formats to strictly HH:MM (24-hour)."""
     if not time_str: return None
+    
     clean = re.split(r'\s*[-–]\s*|\s+to\s+', str(time_str))[0].strip()
-    for fmt in ["%I:%M %p", "%I %p", "%H:%M", "%I:%M%p"]:
+    
+    formats = [
+        "%I:%M %p", "%I %p", "%H:%M", "%I:%M%p", "%I%p"
+    ]
+    
+    for fmt in formats:
         try:
-            return datetime.strptime(clean, fmt).strftime("%I:%M %p")
+            return datetime.strptime(clean, fmt).strftime("%H:%M")
         except ValueError:
             continue
+            
     if clean.isdigit():
         val = int(clean)
-        if 8 <= val <= 11: return f"{val:02d}:00 AM"
-        if 1 <= val <= 6:  return f"{val:02d}:00 PM"
-        if val == 12:      return "12:00 PM"
-    return clean
+        if 7 <= val <= 11: return f"{val:02d}:00"
+        if 1 <= val <= 6:  return f"{val+12:02d}:00"
+        if val == 12:      return "12:00"
+        
+    return None 
 
 def resolve_time(row, schedule_map):
-    existing_time = row['Time']
+    """Determines the best time for an assignment."""
+    existing_time = row.get('Time')
+    
     if existing_time and any(char.isdigit() for char in str(existing_time)):
-        return standardize_time(existing_time)
+        std = standardize_time(existing_time)
+        if std: return std
+
     try:
-        date_obj = pd.to_datetime(row['Date'])
-        day_name = date_obj.strftime('%A') 
+        if pd.notna(row['Date']):
+            date_obj = pd.to_datetime(row['Date'])
+            day_name = date_obj.strftime('%A') 
+            if day_name in schedule_map:
+                return schedule_map[day_name]
     except:
-        return "11:59 PM"
-    if day_name in schedule_map:
-        return schedule_map[day_name]
-    return "11:59 PM"
+        pass
+
+    return "23:59"
 
 # --- PARSING ENGINE ---
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
-    # Resolve Key
-    active_key = api_key if api_key else API_KEY
+    active_key = api_key if api_key else DEFAULT_API_KEY
     if not active_key:
-        print("❌ Error: No API Key found. Set GEMINI_API_KEY in Railway Variables.")
+        print("❌ Error: No GEMINI_API_KEY found.")
         return None
 
-    # Configure the Stable SDK
     genai.configure(api_key=active_key)
-    print(f"Reading {pdf_path}...")
+    print(f"📄 Parsing: {os.path.basename(pdf_path)}")
 
     try:
-        # Upload File
         sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
         
-        # Wait for processing
-        # Increased sleep to 2s to reduce API call frequency
         while sample_file.state.name == "PROCESSING":
-            time.sleep(2)
+            time.sleep(1)
             sample_file = genai.get_file(sample_file.name)
             
         if sample_file.state.name != "ACTIVE":
@@ -70,37 +76,32 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
             return None
 
         prompt = """
-        Extract syllabus data into JSON format.
+        Extract all assignments, exams, and due dates from this syllabus into JSON.
         
-        Structure:
+        Output format:
         {
             "metadata": {
                 "course_name": "string",
-                "class_meetings": [
-                    {"days": ["Monday"], "start_time": "11:00 AM"}
-                ]
+                "class_meetings": [ {"days": ["Monday"], "start_time": "14:00"} ]
             },
             "assignments": [
                 {
                     "date": "YYYY-MM-DD",
-                    "time": "11:59 PM", 
+                    "time": "HH:MM", 
                     "assignment_name": "string",
-                    "category": "Exam/Reading/Project/Other",
+                    "category": "Exam/Reading/P-Set/Essay/Project",
                     "description": "string"
                 }
             ]
         }
         
         Rules:
-        - Dates format must be YYYY-MM-DD.
-        - If no time is listed, use null.
-        - Capture all exams and due dates.
+        1. Dates MUST be YYYY-MM-DD.
+        2. Times MUST be 24-hour format (HH:MM) if available. If not, null.
         """
 
-        # --- CHANGED: Using 1.5 Flash for better rate limit stability ---
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
-        # --- ADDED: Retry Logic for 429 Errors ---
         max_retries = 3
         response = None
 
@@ -110,47 +111,47 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                     [sample_file, prompt],
                     generation_config={"response_mime_type": "application/json"}
                 )
-                break # Success, exit loop
+                break 
+            except ResourceExhausted:
+                print(f"⚠️ Quota hit. Retrying in 5s... ({attempt+1}/{max_retries})")
+                time.sleep(5)
             except Exception as e:
-                # Check for "429" or "Resource Exhausted"
-                if "429" in str(e) or "resource exhausted" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        print(f"⚠️ Rate limit hit (429). Retrying in {2} seconds...")
-                        time.sleep(5)
-                        continue
-                print(f"❌ Error generating content: {e}")
+                print(f"❌ GenAI Error: {e}")
                 return None
         
-        if not response:
-            return None
+        if not response: return None
 
-        import json
         try:
             data = json.loads(response.text)
-        except Exception as e:
-            print(f"❌ JSON Parse Error: {e}")
+        except:
+            print("❌ Failed to parse JSON response from Gemini")
             return None
 
+        # --- FIX: Handle List vs Dict Response ---
+        # If Gemini returned a plain list [ ... ], wrap it in a dict
+        if isinstance(data, list):
+            data = {"assignments": data, "metadata": {}}
+        
         # --- Process Metadata ---
         meta = data.get("metadata", {})
         course_name = meta.get("course_name", "Unknown Course")
-        meetings = meta.get("class_meetings", [])
         
         schedule_map = {}
-        for meeting in meetings:
+        for meeting in meta.get("class_meetings", []):
             raw_time = meeting.get("start_time", "")
             std_time = standardize_time(raw_time)
-            
             days = meeting.get("days", [])
-            if isinstance(days, str): days = [days] 
+            if isinstance(days, str): days = [days]
             
-            for day in days:
-                for full_day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
-                    if full_day.lower() in str(day).lower():
-                        schedule_map[full_day] = std_time
+            if std_time:
+                for day in days:
+                    for full_day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
+                        if full_day.lower() in str(day).lower():
+                            schedule_map[full_day] = std_time
 
         # --- Process Assignments ---
         rows = []
+        # Now .get() is safe because we ensured data is a dict
         for item in data.get("assignments", []):
             rows.append({
                 "Course": course_name,
@@ -162,15 +163,17 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
             })
             
         df = pd.DataFrame(rows)
-        if not df.empty:
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            df = df.dropna(subset=['Date'])
-            df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
+        if df.empty: return df
+
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+        df = df.dropna(subset=['Date'])
+        
+        df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
 
         return df
 
     except Exception as e:
-        print(f"❌ Error analyzing {pdf_path}: {e}")
+        print(f"❌ Critical Parsing Error: {e}")
         return None
 
 # --- CONSOLIDATION ---
@@ -179,24 +182,12 @@ def consolidate_assignments(df):
 
     group_cols = ['Course', 'Date', 'Time', 'Category']
     
-    def merge_text(series):
-        items = [s for s in series if s]
-        if not items: return ""
-        unique_items = []
-        seen = set()
-        for x in items:
-            if x not in seen:
-                unique_items.append(x)
-                seen.add(x)
-        if len(unique_items) == 1: return unique_items[0]
-        return " / ".join(unique_items)
-
-    def merge_names(series):
-        return " / ".join(sorted(set(series)))
+    def merge_unique(series):
+        return " / ".join(sorted(set(str(s) for s in series if s)))
 
     df_consolidated = df.groupby(group_cols).agg({
-        'Assignment': merge_names,
-        'Description': merge_text
+        'Assignment': merge_unique,
+        'Description': merge_unique
     }).reset_index()
     
     return df_consolidated.sort_values(by=['Date', 'Time'])
