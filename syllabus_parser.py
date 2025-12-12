@@ -115,7 +115,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                 # Check for "429" or "Resource Exhausted"
                 if "429" in str(e) or "resource exhausted" in str(e).lower():
                     if attempt < max_retries - 1:
-                        print(f"⚠️ Rate limit hit (429). Retrying in {wait_time} seconds...")
+                        print(f"⚠️ Rate limit hit (429). Retrying in {2} seconds...")
                         time.sleep(5)
                         continue
                 print(f"❌ Error generating content: {e}")
