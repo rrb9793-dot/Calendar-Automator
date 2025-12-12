@@ -7,12 +7,13 @@ from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from whitenoise import WhiteNoise
-#from google.api_core.exceptions import ResourceExhausted
 from openai import RateLimitError, APIError
+
 # --- CUSTOM MODULES ---
 import predictive_model 
 import syllabus_parser 
 import calendar_maker
+import db  # <--- IMPORT DB MODULE
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,8 +29,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
-# Constants
-#GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # ==========================================
@@ -57,6 +56,11 @@ def generate_schedule():
         survey_data = req_data.get('survey', {})
         manual_courses = req_data.get('courses', [])
 
+        # --- [DB STEP 1] SAVE STUDENT PROFILE ---
+        # We save this immediately so the user exists for Foreign Keys
+        if survey_data.get('email'):
+            db.save_student_profile(survey_data, frontend_prefs)
+
         # B. User ICS Files
         ics_files_bytes = []
         if 'ics' in request.files:
@@ -83,7 +87,6 @@ def generate_schedule():
             })
 
         # B. PDF Entries (From Parsing)
-        # B. PDF Entries (From Parsing)
         uploaded_pdfs = request.files.getlist('pdfs')
         if uploaded_pdfs:
             print(f"Processing {len(uploaded_pdfs)} PDF(s)...")
@@ -94,40 +97,16 @@ def generate_schedule():
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
                 try:
-                    # Pass the OPENAI key instead of GEMINI
                     df = syllabus_parser.parse_syllabus_to_data(path, OPENAI_API_KEY)
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
-                    
-                    # OpenAI also has rate limits, so keeping a small sleep is good
                     time.sleep(1) 
-
                 except RateLimitError:
                     print(f"❌ OpenAI Rate Limit Hit on file: {filename}")
-                    return jsonify({
-                        'error': 'OpenAI Rate Limit Exceeded. Please check your credit balance or wait.'
-                    }), 429
+                    return jsonify({'error': 'OpenAI Rate Limit Exceeded.'}), 429
                 except Exception as e:
                     print(f"❌ Error processing {filename}: {e}")
                     continue
-                # try:
-                #     # Try to parse the PDF
-                #     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
-                #     if df is not None and not df.empty:
-                #         pdf_dfs.append(df)
-                    
-                #     # Wait 2 seconds between files to avoid hitting the free tier limit
-                #     time.sleep(2) 
-
-                # except ResourceExhausted:
-                #     # If Google says "Stop", we return a 429 error gracefully
-                #     print(f"❌ Quota Exceeded on file: {filename}")
-                #     return jsonify({
-                #         'error': 'System is busy (Google AI Quota Exceeded). Please wait 1 minute and try again.'
-                #     }), 429
-                # except Exception as e:
-                #     print(f"❌ Error processing {filename}: {e}")
-                #     continue
             
             if pdf_dfs:
                 master_df = pd.concat(pdf_dfs, ignore_index=True)
@@ -139,18 +118,18 @@ def generate_schedule():
                     all_assignments.append(record)
 
         # ---------------------------------------------------------
-        # 3. PREDICTION & FORMATTING
+        # 3. PREDICTION & FORMATTING (AND DB SAVING)
         # ---------------------------------------------------------
         formatted_assignments = []
         
         for i, item in enumerate(all_assignments):
             # A. Prepare details for prediction
             if item["source_type"] == "manual":
-                # Manual entries have full user details
                 assignment_details = item["raw_details"]
             else:
-                # PDF entries need defaults for fields the PDF lacks
+                # Defaults for PDF entries
                 assignment_details = {
+                    'assignment_name': item.get("Assignment", "Untitled"),
                     'work_sessions': 1,
                     'assignment_type': item.get('Category', 'p_set'), 
                     'field_of_study': survey_data.get('major', 'Business'),
@@ -160,9 +139,15 @@ def generate_schedule():
                     'submitted_in_person': 'No'
                 }
 
-            # B. Run Prediction (Using strict mapping)
+            # B. Run Prediction
             predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
             
+            # --- [DB STEP 2] SAVE ASSIGNMENT ---
+            # We save here because we now have the 'predicted_hours' required by your table
+            # We only save manual entries to keep the DB clean for user-submitted data
+            if item["source_type"] == "manual" and survey_data.get('email'):
+                db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
+
             # C. Format Date/Time
             date_str = item.get("Date")
             time_str = item.get("Time")
@@ -184,7 +169,6 @@ def generate_schedule():
         # 4. CALENDAR GENERATION
         # ---------------------------------------------------------
         backend_preferences = {
-            # Use frontend timezone, default to New York if missing
             "timezone": frontend_prefs.get('timezone', 'America/New_York'),
             "work_windows": {
                 "weekday_start_hour": float(frontend_prefs.get('weekdayStart', '09:00').split(':')[0]),
@@ -222,4 +206,6 @@ def generate_schedule():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    # Initialize DB tables on startup
+    db.init_db()
     app.run(debug=True, port=5000)
