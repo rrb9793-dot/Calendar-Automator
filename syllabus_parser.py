@@ -152,15 +152,15 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         # --- Process Assignments ---
         rows = []
         for item in data.get("assignments", []):
-        rows.append({
-            # PRIORITIZE MANUAL NAME
-            "Course": manual_course_name if manual_course_name else course_name_ai, 
-            "Date": item.get("date"),
-            "Time": item.get("time"), 
-            "Category": item.get("category", "Other"),
-            "Assignment": item.get("assignment_name", "Untitled"),
-            "Description": item.get("description", "")
-        })
+            rows.append({
+                # PRIORITIZE MANUAL NAME
+                "Course": manual_course_name if manual_course_name else course_name_ai, 
+                "Date": item.get("date"),
+                "Time": item.get("time"), 
+                "Category": item.get("category", "Other"),
+                "Assignment": item.get("assignment_name", "Untitled"),
+                "Description": item.get("description", "")
+            })
             
         df = pd.DataFrame(rows)
         if not df.empty:
