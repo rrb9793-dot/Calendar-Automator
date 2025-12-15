@@ -242,7 +242,7 @@ def generate_free_blocks_engine(local_tz, work_windows, df_assignments, uploaded
 
     return build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz)
 
-def generate_sessions_from_assignments(df_assignments, default_session_minutes=60):
+def generate_sessions_from_assignments(df_assignments, default_session_minutes=240):
     sessions = []
     if df_assignments.empty: return sessions
 
