@@ -280,12 +280,18 @@ def generate_sessions_from_assignments(df_assignments, default_session_minutes=6
             })
     return sorted(sessions, key=lambda x: x["due_date"])
 
-def schedule_sessions_load_balanced(free_blocks_map, sessions, max_hours_per_day=24):
+def schedule_sessions_load_balanced(free_blocks_map, sessions, 
+                                    max_hours_per_day=24, 
+                                    break_minutes=15,
+                                    max_sessions_per_day=4): # <-- NEW PARAMETER
     scheduled = []
     unscheduled = []
     daily_usage_minutes = defaultdict(float)
+    daily_session_count = defaultdict(int) # <-- NEW TRACKER
     max_minutes = max_hours_per_day * 60
+    break_duration = timedelta(minutes=break_minutes) 
 
+    # Create a deep copy of free blocks to modify
     free_map = {k: v[:] for k, v in free_blocks_map.items()}
     sorted_dates = sorted(free_map.keys())
 
@@ -295,37 +301,102 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions, max_hours_per_day
         duration = timedelta(minutes=duration_mins)
 
         for d in sorted_dates:
-            if d > session["due_date"]: break
-            if daily_usage_minutes[d] + duration_mins > max_minutes: continue
+            # 1. Check Due Date, Daily Time Limit, and DAILY SESSION LIMIT <-- MODIFIED CHECK
+            if d > session["due_date"]: 
+                break
+            if daily_usage_minutes[d] + duration_mins > max_minutes: 
+                continue
+            if daily_session_count[d] >= max_sessions_per_day: # <-- NEW CONSTRAINT
+                continue
 
             day_blocks = free_map[d]
             for i, (start, end) in enumerate(day_blocks):
+                
+                # Required duration includes the session time PLUS the post-session break
+                required_block_duration = duration + break_duration
                 block_duration = end - start
-                if block_duration >= duration:
+                
+                if block_duration >= required_block_duration:
                     session_start = start
                     session_end = start + duration
 
+                    # 2. Schedule the Session
                     rec = session.copy()
                     rec["start"] = session_start
                     rec["end"] = session_end
                     rec["date"] = d
                     scheduled.append(rec)
                     
+                    # 3. Update Daily Trackers
                     daily_usage_minutes[d] += duration_mins
+                    daily_session_count[d] += 1 # <-- INCREMENT COUNTER
 
-                    new_start = session_end
+                    # 4. Calculate New Free Block Start (Includes Break)
+                    new_start = session_end + break_duration 
+
                     if new_start < end:
+                        # The block has remaining time after the session and break
                         free_map[d][i] = (new_start, end)
                     else:
+                        # The session and break consumed the entire block
                         free_map[d].pop(i)
+                    
                     placed = True
                     break
-            if placed: break
+                    
+            if placed: 
+                break
 
         if not placed:
             unscheduled.append(session)
 
     return scheduled, unscheduled
+# def schedule_sessions_load_balanced(free_blocks_map, sessions, max_hours_per_day=24):
+#     scheduled = []
+#     unscheduled = []
+#     daily_usage_minutes = defaultdict(float)
+#     max_minutes = max_hours_per_day * 60
+
+#     free_map = {k: v[:] for k, v in free_blocks_map.items()}
+#     sorted_dates = sorted(free_map.keys())
+
+#     for session in sessions:
+#         placed = False
+#         duration_mins = session["duration_minutes"]
+#         duration = timedelta(minutes=duration_mins)
+
+#         for d in sorted_dates:
+#             if d > session["due_date"]: break
+#             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
+
+#             day_blocks = free_map[d]
+#             for i, (start, end) in enumerate(day_blocks):
+#                 block_duration = end - start
+#                 if block_duration >= duration:
+#                     session_start = start
+#                     session_end = start + duration
+
+#                     rec = session.copy()
+#                     rec["start"] = session_start
+#                     rec["end"] = session_end
+#                     rec["date"] = d
+#                     scheduled.append(rec)
+                    
+#                     daily_usage_minutes[d] += duration_mins
+
+#                     new_start = session_end
+#                     if new_start < end:
+#                         free_map[d][i] = (new_start, end)
+#                     else:
+#                         free_map[d].pop(i)
+#                     placed = True
+#                     break
+#             if placed: break
+
+#         if not placed:
+#             unscheduled.append(session)
+
+#     return scheduled, unscheduled
 
 # ==========================================================
 # BLOCK 6: OUTPUT GENERATOR
@@ -367,9 +438,20 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
 
     # 3. Create Session Chunks
     all_sessions = generate_sessions_from_assignments(df_assignments)
-
-    # 4. Schedule
-    scheduled, unscheduled = schedule_sessions_load_balanced(free_blocks, all_sessions)
+    
+    # Set your desired limits here, added this 
+    MAX_DAILY_HOURS = 8
+    BREAK_MINUTES = 15
+    MAX_DAILY_SESSIONS = 3 
+     # 4. Schedule
+    scheduled, unscheduled = schedule_sessions_load_balanced(
+        free_blocks, 
+        all_sessions, 
+        max_hours_per_day=MAX_DAILY_HOURS,
+        break_minutes=BREAK_MINUTES,
+        max_sessions_per_day=MAX_DAILY_SESSIONS
+    )
+    #scheduled, unscheduled = schedule_sessions_load_balanced(free_blocks, all_sessions)
 
     # 5. Generate ICS File
     timestamp = int(datetime.now().timestamp())
