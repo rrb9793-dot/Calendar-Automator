@@ -50,7 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitBtn = document.getElementById('submitBtn');
     if (submitBtn) submitBtn.addEventListener('click', handleSubmit);
 
-    // --- 5. AUTOFILL LOGIC (THE FIX) ---
+    // --- 5. AUTOFILL LOGIC (FIXED) ---
     const emailInput = document.getElementById('email');
 
     if (emailInput) {
@@ -160,7 +160,6 @@ function initTimePickers() {
             minSel.add(new Option(val, val));
         }
         
-        // Handle default values safely
         const defaultVal = container.dataset.default || "09:00";
         const defTime = defaultVal.split(':');
         
@@ -233,19 +232,17 @@ function addAssignmentRow() {
     assignmentsContainer.appendChild(div);
 }
 
+// --- FIXED PDF ROW (REMOVED MANUAL INPUT) ---
 function addPdfRow() {
     const pdfContainer = document.getElementById('pdfContainer');
     if (!pdfContainer) return;
 
     const div = document.createElement('div');
     div.className = 'syllabus-row'; 
-    div.style.gridTemplateColumns = "1fr 1fr 50px"; 
+    // Revert to simple 2-column layout (File + Delete Button)
+    div.style.gridTemplateColumns = "1fr 50px"; 
     
     div.innerHTML = `
-        <div>
-            <label style="font-size:0.7rem;">Course Name</label>
-            <input type="text" class="pdf-course-name" placeholder="e.g. Quantum Mechanics">
-        </div>
         <div>
             <label style="font-size:0.7rem;">Syllabus PDF</label>
             <input type="file" class="pdf-file" accept=".pdf">
@@ -300,13 +297,13 @@ async function handleSubmit() {
         const formData = new FormData();
         formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
+        // PDF Processing (Updated to remove manual course name logic)
         let pdfIndex = 0;
         document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
             const fileInput = row.querySelector('.pdf-file');
-            const nameInput = row.querySelector('.pdf-course-name');
             if (fileInput && fileInput.files.length > 0) {
                 formData.append(`pdf_${pdfIndex}`, fileInput.files[0]);
-                formData.append(`course_name_${pdfIndex}`, nameInput.value || "Unknown Course");
+                // No manual name needed
                 pdfIndex++;
             }
         });
@@ -329,7 +326,6 @@ async function handleSubmit() {
             if (result.assignments && result.assignments.length > 0) {
                 let html = '<div class="prediction-header"><h5>Calculated Workloads</h5></div>';
                 
-                // --- UPDATED WORKLOAD DISPLAY ---
                 result.assignments.forEach(task => {
                     const dateObj = new Date(task.due_date);
                     const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -345,7 +341,6 @@ async function handleSubmit() {
                         </div>
                     `;
                 });
-                // --------------------------------
                 
                 predictionList.innerHTML = html;
             }
