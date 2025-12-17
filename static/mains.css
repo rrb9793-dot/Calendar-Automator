@@ -54,7 +54,7 @@ body {
     
     /* MOVES LOGO DOWN TO SIT ON THE LINE */
     /* -10px cancels out the padding-bottom of the container */
-    margin-bottom: -15px; 
+    margin-bottom: -17px; 
 }
 
 /* Cards */
