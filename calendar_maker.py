@@ -13,7 +13,6 @@ from collections import defaultdict
 # 🔧 DEMO SWITCH (TIME TRAVEL)
 # ==========================================================
 # Set this to a date string (e.g., "2025-09-01") to pretend it is that day.
-# Set to None to use the actual real-world date.
 DEMO_START_DATE = "2025-09-01" 
 # DEMO_START_DATE = None 
 
@@ -181,14 +180,12 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
     FREE_BLOCKS = {}
     current_date = horizon_start.date()
     
-    # Use the passed-in "Now" (which might be the demo date)
     now = current_simulated_dt
     
     while current_date <= horizon_end.date():
         day_start_cal = datetime.combine(current_date, time.min).replace(tzinfo=local_tz)
         effective_start = max(day_start_cal, horizon_start)
         
-        # Clip to "Now" if we are on the starting day
         if current_date == now.date():
              effective_start = max(effective_start, now)
         
@@ -224,7 +221,7 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
     return FREE_BLOCKS
 
 # ==========================================================
-# BLOCK 3: SESSION GENERATOR (DYNAMIC LOOKAHEAD)
+# BLOCK 3: SESSION GENERATOR (WITH DEFERRAL LOGIC)
 # ==========================================================
 def extract_class_from_title(title):
     match = re.search(r'\((.*?)\)', title)
@@ -234,11 +231,8 @@ def extract_class_from_title(title):
 
 def generate_sessions_from_assignments(df_assignments, current_date):
     """
-    Handles assignments with 'Dynamic Lookahead' based on workload.
-    Rules:
-      - 1-2 Sessions: Start 1 week (7 days) before.
-      - 3-4 Sessions: Start 2 weeks (14 days) before.
-      - 5+  Sessions: Start 1 month (30 days) before.
+    Handles assignments.
+    Calculates an 'earliest_start_date' so we don't start Dec assignments in Sept.
     """
     sessions = []
     if df_assignments.empty: return sessions
@@ -254,30 +248,27 @@ def generate_sessions_from_assignments(df_assignments, current_date):
         
         original_due = row["due_dates"].date() if isinstance(row["due_dates"], datetime) else row["due_dates"]
         
-        # --- DYNAMIC PROCRASTINATION LOGIC ---
+        # --- DEFERRAL LOGIC (Work Backwards) ---
+        # 1-2 Sessions: Start 7 days before
+        # 3-4 Sessions: Start 14 days before
+        # 5+  Sessions: Start 30 days before
         if num_sessions <= 2:
-            lookahead_days = 7   # "1-2: one week"
+            start_window_days = 7   
         elif num_sessions <= 4:
-            lookahead_days = 14  # "2-4: two weeks"
+            start_window_days = 14  
         else:
-            lookahead_days = 30  # "4+: one month"
+            start_window_days = 30  
 
-        days_until_due = (original_due - current_date).days
-        
-        # If it's too far in the future, SKIP IT.
-        # (Unless it's already overdue, then we must keep it)
-        if days_until_due > lookahead_days:
-            continue
-        # -------------------------------------
+        earliest_allowed_start = original_due - timedelta(days=start_window_days)
+        # ---------------------------------------
 
         is_overdue = original_due < current_date
         
-        # --- CATCH-UP LOGIC ---
         if is_overdue:
             effective_due = current_date + timedelta(days=7)
+            earliest_allowed_start = current_date # Start immediately if overdue
         else:
             effective_due = max(original_due, current_date)
-        # ----------------------
 
         c_name = row.get("class_name", "General")
         a_name = row.get("assignment_name", "Study Task")
@@ -293,6 +284,7 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "duration_minutes": dur,
                 "due_date": effective_due, 
                 "full_due_dt": row["due_dates"], 
+                "earliest_start": earliest_allowed_start, # Pass this constraint to the engine
                 "is_overdue": is_overdue, 
                 "field_of_study": row.get("field_of_study", ""),
                 "assignment_type": row.get("assignment_type", "")
@@ -301,7 +293,7 @@ def generate_sessions_from_assignments(df_assignments, current_date):
     return sorted(sessions, key=lambda x: (x["is_overdue"], x["full_due_dt"]))
 
 # ==========================================================
-# BLOCK 4: SCHEDULING ENGINE (CLASS-BASED SPACING)
+# BLOCK 4: SCHEDULING ENGINE (RESPECTS START DATES)
 # ==========================================================
 def schedule_sessions_load_balanced(free_blocks_map, sessions, 
                                     max_hours_per_day, 
@@ -326,14 +318,20 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
         duration_mins = session["duration_minutes"]
         duration = timedelta(minutes=duration_mins)
         s_class = session["class_name"] 
+        earliest_start = session.get("earliest_start")
 
         for d in sorted_dates:
             if d > session["due_date"]: break
             
+            # --- NEW CHECK: IS IT TOO EARLY? ---
+            if earliest_start and d < earliest_start:
+                continue # Skip this day, it's too early for this task
+            # -----------------------------------
+            
             # 1. CHECK HOURS
             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
 
-            # 2. CHECK SPACING (Subject-Based)
+            # 2. CHECK SPACING
             if enforce_spacing:
                 if s_class in daily_class_tracker[d] and s_class != "General":
                     continue
@@ -409,7 +407,6 @@ def create_output_ics(scheduled_tasks, output_path):
         if isinstance(start, str): start = datetime.fromisoformat(start)
         if isinstance(end, str): end = datetime.fromisoformat(end)
 
-        # --- DEADLINE FORMATTING ---
         deadline_dt = task.get('full_due_dt')
         deadline_str = "Unknown"
         if deadline_dt:
@@ -419,22 +416,18 @@ def create_output_ics(scheduled_tasks, output_path):
                  deadline_str = deadline_dt.strftime("%Y-%m-%d %H:%M")
              else:
                  deadline_str = str(deadline_dt)
-        # ---------------------------
 
         summary_prefix = "EXAM: " if task.get('is_exam') else "Do: "
         event.add('summary', f"{summary_prefix}{task['assignment_name']}")
         event.add('dtstart', start)
         event.add('dtend', end)
         
-        # --- ENRICHED DESCRIPTION ---
         description = (
             f"Class: {task.get('class_name', 'General')}\n"
             f"Deadline: {deadline_str}\n"
             f"Type: {task.get('assignment_type', 'Task')}"
         )
         event.add('description', description)
-        # ----------------------------
-
         cal.add_component(event)
 
     with open(output_path, 'wb') as f:
@@ -448,7 +441,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
 
     # ==========================================
-    # ⏳ TIME TRAVEL LOGIC
+    # ⏳ TIME TRAVEL LOGIC (RESTORED)
     # ==========================================
     if DEMO_START_DATE:
         print(f"🔮 DEMO MODE: Time traveling to {DEMO_START_DATE}")
@@ -459,7 +452,8 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     # ==========================================
 
     horizon_start = datetime.combine(today_dt.date(), time.min).replace(tzinfo=local_tz)
-    horizon_end = horizon_start + timedelta(days=30)
+    # Set a long horizon (120 days) so we can fit the whole semester
+    horizon_end = horizon_start + timedelta(days=120)
     
     if not df_assignments.empty and "due_dates" in df_assignments:
         max_due = df_assignments["due_dates"].max()
@@ -498,18 +492,17 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     merged_busy = merge_busy_blocks(busy_blocks, join_touching=True)
     buffered_busy = add_buffer_to_busy_timeline(merged_busy, buffer_minutes=15)
     
-    # PASS THE SIMULATED DATE HERE
     free_blocks = build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz, today_dt)
     
     floating_sessions = generate_sessions_from_assignments(floating_df, today_dt.date())
 
     # =========================================================================
-    # TWO-PASS LOGIC (Class-Based Spacing + Catch-Up)
+    # TWO-PASS LOGIC (Class-Based Spacing + Catch-Up + Deferral)
     # =========================================================================
     daily_usage_tracker = defaultdict(float)
     daily_class_tracker = defaultdict(set)
 
-    # PHASE 1: Healthy (8h) + Enforce Class Spacing
+    # PHASE 1: Healthy (8h) + Enforce Class Spacing + Deferral (don't start too early)
     scheduled_p1, unscheduled_p1 = schedule_sessions_load_balanced(
         free_blocks, 
         floating_sessions, 
