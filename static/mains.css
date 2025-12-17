@@ -142,16 +142,45 @@ select:focus, input:focus { outline: none; border-color: var(--retro-ink); }
     border-bottom: 2px solid var(--retro-ink);
     padding-bottom: 5px;
 }
+
+/* UPDATED FLEX ROW FOR RESULTS */
 .prediction-row {
     display: flex;
     justify-content: space-between;
-    padding: 8px 0;
+    align-items: center; 
+    padding: 10px 0;
     border-bottom: 1px dotted var(--grid-line);
-    font-size: 0.95rem;
 }
+
 .prediction-row:last-child { border-bottom: none; }
-.prediction-row .p-name { font-weight: bold; }
-.prediction-row .p-time { font-family: var(--font-header); color: var(--accent-primary); }
+
+.p-info {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    gap: 4px; 
+}
+
+.p-name { 
+    font-weight: bold; 
+    font-size: 0.95rem;
+    color: var(--retro-ink);
+}
+
+.p-date {
+    font-family: var(--font-header);
+    font-size: 0.75rem;
+    color: var(--accent-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.p-time { 
+    font-family: var(--font-header); 
+    color: var(--accent-primary); 
+    font-size: 1.1rem;
+    white-space: nowrap;
+}
 
 @media (max-width: 700px) {
     .grid-2, .schedule-grid, .syllabus-row { grid-template-columns: 1fr !important; }
