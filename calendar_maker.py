@@ -18,7 +18,7 @@ DEMO_START_DATE = "2025-09-01"
 # DEMO_START_DATE = None 
 
 # ==========================================================
-# BLOCK 1 & 2: INPUT PARSER
+# BLOCK 1: INPUT PARSER
 # ==========================================================
 def parse_request_inputs(json_data):
     # 1. TIMEZONE & WORK WINDOWS
@@ -178,10 +178,6 @@ def add_buffer_to_busy_timeline(busy_timeline, buffer_minutes=15):
     return merge_busy_blocks(buffered, join_touching=True)
 
 def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, local_tz, current_simulated_dt):
-    """
-    Constructs free time blocks.
-    Uses 'current_simulated_dt' instead of real 'now' to allow time travel.
-    """
     FREE_BLOCKS = {}
     current_date = horizon_start.date()
     
@@ -228,7 +224,7 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
     return FREE_BLOCKS
 
 # ==========================================================
-# BLOCK 3: SESSION GENERATOR (WITH CATCH-UP LOGIC)
+# BLOCK 3: SESSION GENERATOR (DYNAMIC LOOKAHEAD)
 # ==========================================================
 def extract_class_from_title(title):
     match = re.search(r'\((.*?)\)', title)
@@ -238,9 +234,11 @@ def extract_class_from_title(title):
 
 def generate_sessions_from_assignments(df_assignments, current_date):
     """
-    Handles assignments. 
-    If an assignment is OVERDUE, it gives it a fake deadline of 
-    'Today + 7 Days' to allow the spacer to work.
+    Handles assignments with 'Dynamic Lookahead' based on workload.
+    Rules:
+      - 1-2 Sessions: Start 1 week (7 days) before.
+      - 3-4 Sessions: Start 2 weeks (14 days) before.
+      - 5+  Sessions: Start 1 month (30 days) before.
     """
     sessions = []
     if df_assignments.empty: return sessions
@@ -255,6 +253,23 @@ def generate_sessions_from_assignments(df_assignments, current_date):
         remainder = int(total_time_mins % num_sessions)
         
         original_due = row["due_dates"].date() if isinstance(row["due_dates"], datetime) else row["due_dates"]
+        
+        # --- DYNAMIC PROCRASTINATION LOGIC ---
+        if num_sessions <= 2:
+            lookahead_days = 7   # "1-2: one week"
+        elif num_sessions <= 4:
+            lookahead_days = 14  # "2-4: two weeks"
+        else:
+            lookahead_days = 30  # "4+: one month"
+
+        days_until_due = (original_due - current_date).days
+        
+        # If it's too far in the future, SKIP IT.
+        # (Unless it's already overdue, then we must keep it)
+        if days_until_due > lookahead_days:
+            continue
+        # -------------------------------------
+
         is_overdue = original_due < current_date
         
         # --- CATCH-UP LOGIC ---
@@ -379,7 +394,7 @@ def merge_contiguous_sessions(scheduled_sessions):
     return merged
 
 # ==========================================================
-# BLOCK 5: OUTPUT & MAIN
+# BLOCK 5: OUTPUT GENERATOR
 # ==========================================================
 def create_output_ics(scheduled_tasks, output_path):
     cal = Calendar()
@@ -426,6 +441,9 @@ def create_output_ics(scheduled_tasks, output_path):
         f.write(cal.to_ical())
     return output_path
 
+# ==========================================================
+# MAIN PROCESSOR
+# ==========================================================
 def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
 
@@ -434,9 +452,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     # ==========================================
     if DEMO_START_DATE:
         print(f"🔮 DEMO MODE: Time traveling to {DEMO_START_DATE}")
-        # Parse the demo date
         demo_dt = datetime.fromisoformat(DEMO_START_DATE)
-        # Combine with current time of day to make it realistic, or set to morning
         today_dt = datetime.combine(demo_dt.date(), datetime.now().time()).replace(tzinfo=local_tz)
     else:
         today_dt = datetime.now(local_tz)
