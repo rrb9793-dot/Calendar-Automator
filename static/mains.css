@@ -35,14 +35,16 @@ body {
 .header-text h1 { font-family: var(--font-header); font-size: 2.5rem; margin: 0; letter-spacing: -1px; }
 .header-text .subtitle { font-family: var(--font-header); margin: 5px 0 0 0; opacity: 0.7; }
 
-/* --- NEW LOGO STYLE (Option B: Blend Mode) --- */
+/* --- NEW LOGO STYLE (Rounded, Solid) --- */
 .header-logo {
     height: 80px; 
     width: auto;
-    /* This makes the beige background of the logo transparent 
-       so the paper texture shows through */
-    mix-blend-mode: multiply; 
     object-fit: contain;
+    /* Round the corners - increase/decrease this number as desired */
+    border-radius: 15px; 
+    /* Optional: Add the retro border back so it matches the other cards */
+    border: 2px solid var(--retro-ink);
+    /* Blend mode removed so it's not transparent */
 }
 
 /* Cards */
