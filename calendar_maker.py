@@ -51,11 +51,8 @@ def parse_request_inputs(json_data):
         }
         df_assignments.rename(columns=column_map, inplace=True)
         
-        # --- FIX APPLIED HERE ---
-        # Added format='mixed' to handle "11:59 PM" and other formats gracefully
         if "due_dates" in df_assignments.columns:
             df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed', errors='coerce')
-            # Drop any rows where the date couldn't be parsed (NaT)
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
         if "time_spent_hours" in df_assignments.columns:
@@ -63,10 +60,9 @@ def parse_request_inputs(json_data):
         else:
             df_assignments["time_spent_hours"] = 2.0 
 
-        if "sessions_needed" not in df_assignments.columns:
-            df_assignments["sessions_needed"] = 1
-        else:
-            df_assignments["sessions_needed"] = pd.to_numeric(df_assignments["sessions_needed"], errors='coerce').fillna(1).astype(int)
+        # Ensure is_fixed_event exists (New for Exam Logic)
+        if "is_fixed_event" not in df_assignments.columns:
+            df_assignments["is_fixed_event"] = False
 
     else:
         df_assignments = pd.DataFrame()
@@ -83,12 +79,11 @@ def _to_local_dt(value, local_tz: ZoneInfo):
         return value.astimezone(local_tz)
     return datetime.combine(value, time.min, tzinfo=local_tz)
 
-def parse_ics_bytes(ics_content_bytes: bytes, local_tz: ZoneInfo, horizon_start: datetime, horizon_end: datetime) -> pd.DataFrame:
+def parse_ics_bytes(ics_content_bytes, local_tz, horizon_start, horizon_end):
     columns = ["uid", "summary", "start", "end", "all_day"]
     try:
         cal = Calendar.from_ical(ics_content_bytes)
-    except Exception as e:
-        print(f"❌ ICS Parse Error: {e}")
+    except:
         return pd.DataFrame(columns=columns)
 
     occurrences = recurring_ical_events.of(cal).between(horizon_start, horizon_end)
@@ -119,22 +114,14 @@ def parse_ics_bytes(ics_content_bytes: bytes, local_tz: ZoneInfo, horizon_start:
     if not records: return pd.DataFrame(columns=columns)
     return pd.DataFrame(records).sort_values("start").reset_index(drop=True)
 
-def clip_blocks_to_horizon(blocks, horizon_start, horizon_end):
-    clipped = []
-    for start, end in blocks:
-        if end <= horizon_start or start >= horizon_end: continue
-        s = max(start, horizon_start)
-        e = min(end, horizon_end)
-        if s < e: clipped.append((s, e))
-    return clipped
-
-def merge_busy_blocks(blocks, join_touching=True):
+def merge_busy_blocks(blocks):
+    """Merges overlapping or adjacent time blocks."""
     if not blocks: return []
     blocks = sorted(blocks, key=lambda x: x[0])
     merged = []
     cur_start, cur_end = blocks[0]
     for s, e in blocks[1:]:
-        if (join_touching and s <= cur_end) or (not join_touching and s < cur_end):
+        if s <= cur_end:
             if e > cur_end: cur_end = e
         else:
             merged.append((cur_start, cur_end))
@@ -143,6 +130,7 @@ def merge_busy_blocks(blocks, join_touching=True):
     return merged
 
 def subtract_busy_from_window(window_start, window_end, busy_blocks):
+    """Subtracts busy blocks from a work window to find free time."""
     relevant = []
     for s, e in busy_blocks:
         if e <= window_start or s >= window_end: continue
@@ -150,6 +138,7 @@ def subtract_busy_from_window(window_start, window_end, busy_blocks):
         e_clipped = min(e, window_end)
         if s_clipped < e_clipped: relevant.append((s_clipped, e_clipped))
     relevant.sort(key=lambda x: x[0])
+    
     free = []
     cur = window_start
     for s, e in relevant:
@@ -158,311 +147,193 @@ def subtract_busy_from_window(window_start, window_end, busy_blocks):
     if cur < window_end: free.append((cur, window_end))
     return free
 
-def add_buffer_to_busy_timeline(busy_timeline, buffer_minutes=15):
-    delta = timedelta(minutes=buffer_minutes)
-    buffered = [(s - delta, e + delta) for (s, e) in busy_timeline]
-    return merge_busy_blocks(buffered, join_touching=True)
-
-def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, local_tz):
-    FREE_BLOCKS = {}
+def build_free_blocks(work_windows, busy_timeline, horizon_start, horizon_end, local_tz):
+    free_blocks = {}
     current_date = horizon_start.date()
-    now = datetime.now(local_tz)
-
+    
     while current_date <= horizon_end.date():
-        day_start_cal = datetime.combine(current_date, time.min).replace(tzinfo=local_tz)
-        day_end_cal = day_start_cal + timedelta(days=1)
-
-        effective_start = max(day_start_cal, horizon_start)
-        if current_date == now.date():
-            effective_start = max(effective_start, now)
-
-        current_day_start = effective_start
-        current_day_end = min(day_end_cal, horizon_end)
-
-        if current_day_start >= current_day_end:
-            current_date += timedelta(days=1); continue
-
-        weekday = current_date.weekday()
-        day_work_windows = WORK_WINDOWS.get(weekday, [])
-
-        day_busy = []
-        for s, e in BUSY_TIMELINE:
-            if e <= current_day_start or s >= current_day_end: continue
-            s_clipped = max(s, current_day_start)
-            e_clipped = min(e, current_day_end)
-            if s_clipped < e_clipped: day_busy.append((s_clipped, e_clipped))
-        day_busy.sort(key=lambda x: x[0])
-
+        day_start = datetime.combine(current_date, time.min).replace(tzinfo=local_tz)
+        day_end = day_start + timedelta(days=1)
+        
+        wd = current_date.weekday()
+        day_work_windows = work_windows.get(wd, [])
+        
         day_free = []
         for start_hour, end_hour in day_work_windows:
-            w_start_cal = day_start_cal + timedelta(hours=float(start_hour))
-            w_end_cal = day_start_cal + timedelta(hours=float(end_hour))
-            w_actual_start = max(w_start_cal, current_day_start)
-            w_actual_end = min(w_end_cal, current_day_end)
-            if w_actual_start < w_actual_end:
-                day_free.extend(subtract_busy_from_window(w_actual_start, w_actual_end, day_busy))
-
-        FREE_BLOCKS[current_date] = day_free
-        current_date += timedelta(days=1)
-    return FREE_BLOCKS
-
-# ==========================================================
-# BLOCK 4: ENGINE
-# ==========================================================
-def generate_free_blocks_engine(local_tz, work_windows, df_assignments, uploaded_files_bytes):
-    # 1. HORIZON
-    today_dt = datetime.now(local_tz)
-    if not df_assignments.empty and "due_dates" in df_assignments:
-        min_due = df_assignments["due_dates"].min().date()
-        max_due = df_assignments["due_dates"].max().date()
-        start_date = min(today_dt.date(), min_due)
-        end_date = max_due + timedelta(days=7)
-    else:
-        start_date = today_dt.date()
-        end_date = start_date + timedelta(days=30)
-
-    horizon_start = datetime.combine(start_date, time.min).replace(tzinfo=local_tz)
-    horizon_end   = datetime.combine(end_date, time.min).replace(tzinfo=local_tz) + timedelta(days=1)
-
-    # 2. PROCESS ICS
-    all_events = []
-    for f_bytes in uploaded_files_bytes:
-        df = parse_ics_bytes(f_bytes, local_tz, horizon_start, horizon_end)
-        all_events.append(df)
-
-    if all_events and any(not df.empty for df in all_events):
-        df_events = pd.concat([df for df in all_events if not df.empty], ignore_index=True)
-        busy_blocks = list(zip(df_events["start"], df_events["end"]))
-    else:
-        busy_blocks = []
-
-    busy_clipped = clip_blocks_to_horizon(busy_blocks, horizon_start, horizon_end)
-    busy_timeline = merge_busy_blocks(busy_clipped, join_touching=True)
-    buffered_busy = add_buffer_to_busy_timeline(busy_timeline, 30)
-
-    return build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz)
-
-def generate_sessions_from_assignments(df_assignments, default_session_minutes=240):
-    sessions = []
-    if df_assignments.empty: return sessions
-
-    for _, row in df_assignments.iterrows():
-        total_hours = row.get("time_spent_hours", 2.0)
-        total_time_mins = total_hours * 60
-        
-        # --- LOGIC UPDATED TO RESPECT 'work sessions' INPUT ---
-        explicit_sessions = row.get("sessions_needed", 1)
-        if explicit_sessions > 1:
-            num_sessions = int(explicit_sessions)
-        else:
-            # Fallback to pure time-based calc if they said 1 session or didn't specify
-            # But if total time is huge, force split
-            num_sessions = math.ceil(total_time_mins / default_session_minutes)
-        
-        # Avoid division by zero
-        num_sessions = max(1, num_sessions)
-
-        base_duration = int(total_time_mins // num_sessions)
-        remainder = int(total_time_mins % num_sessions)
-
-        for i in range(num_sessions):
-            dur = base_duration + (1 if i < remainder else 0)
-            d_obj = row["due_dates"].date() if isinstance(row["due_dates"], datetime) else row["due_dates"]
+            w_start = day_start + timedelta(hours=float(start_hour))
+            w_end = day_start + timedelta(hours=float(end_hour))
             
-            sessions.append({
-                "assignment_id": row.get("assignment_id", f"task_{i}"),
-                "assignment_name": row.get("assignment_name", "Study Task"),
-                "class_name": row.get("class_name", "General"),
-                "duration_minutes": dur,
-                "due_date": d_obj,
-                "field_of_study": row.get("field_of_study", ""),
-                "assignment_type": row.get("assignment_type", "")
+            # Clip to horizon
+            if w_end <= horizon_start: continue
+            w_start = max(w_start, horizon_start)
+            w_end = min(w_end, horizon_end)
+            
+            if w_start < w_end:
+                day_free.extend(subtract_busy_from_window(w_start, w_end, busy_timeline))
+            
+        free_blocks[current_date] = day_free
+        current_date += timedelta(days=1)
+    
+    return free_blocks
+
+# ==========================================================
+# BLOCK 4: ENGINE (UPDATED FOR FIXED EXAMS)
+# ==========================================================
+def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
+    # 1. Parse Inputs
+    local_tz, work_windows, df = parse_request_inputs(json_data)
+    
+    scheduled_tasks = []
+    unscheduled_tasks = []
+    
+    # 2. Horizon
+    today = datetime.now(local_tz)
+    horizon_start = today
+    horizon_end = today + timedelta(days=30)
+    if not df.empty and "due_dates" in df.columns:
+        max_due = df["due_dates"].max()
+        horizon_end = max(horizon_end, max_due + timedelta(days=7))
+
+    busy_blocks = []
+    
+    # A. Load ICS Busy Times
+    for f_bytes in uploaded_files_bytes:
+        ics_df = parse_ics_bytes(f_bytes, local_tz, horizon_start, horizon_end)
+        for _, r in ics_df.iterrows():
+            busy_blocks.append((r['start'], r['end']))
+
+    # B. Handle Fixed Exams (They act as BUSY BLOCKS and SCHEDULED ITEMS)
+    floating_tasks_df = pd.DataFrame()
+    
+    if not df.empty:
+        # Split dataframe
+        fixed_mask = df["is_fixed_event"] == True
+        fixed_df = df[fixed_mask]
+        floating_tasks_df = df[~fixed_mask]
+        
+        # Process Fixed Events (Exams)
+        for _, row in fixed_df.iterrows():
+            start_time = row["due_dates"]
+            # Exams use their specific time estimate (1.25h), default to 1h if missing
+            duration_h = row.get("time_spent_hours", 1.0) 
+            end_time = start_time + timedelta(hours=duration_h)
+            
+            # 1. Add to Busy List (So we don't study during the exam)
+            busy_blocks.append((start_time, end_time))
+            
+            # 2. Add to Final Schedule
+            scheduled_tasks.append({
+                "assignment_id": row.get("assignment_id"),
+                "assignment_name": row.get("assignment_name"),
+                "class_name": row.get("class_name"),
+                "assignment_type": row.get("assignment_type"),
+                "start": start_time,
+                "end": end_time
             })
-    return sorted(sessions, key=lambda x: x["due_date"])
 
-def schedule_sessions_load_balanced(free_blocks_map, sessions, 
-                                    max_hours_per_day=24, 
-                                    break_minutes=15,
-                                    max_sessions_per_day=4): # <-- NEW PARAMETER
-    scheduled = []
-    unscheduled = []
-    daily_usage_minutes = defaultdict(float)
-    daily_session_count = defaultdict(int) # <-- NEW TRACKER
-    max_minutes = max_hours_per_day * 60
-    break_duration = timedelta(minutes=break_minutes) 
+    # 3. Calculate Free Time (Now excluding Exam times)
+    # Merge overlapping busy blocks + add buffer
+    busy_merged = merge_busy_blocks(busy_blocks)
+    
+    # Add 15min buffer around busy blocks
+    buffer = timedelta(minutes=15)
+    buffered_busy = [(s-buffer, e+buffer) for s, e in busy_merged]
+    
+    free_blocks = build_free_blocks(work_windows, merge_busy_blocks(buffered_busy), horizon_start, horizon_end, local_tz)
 
-    # Create a deep copy of free blocks to modify
-    free_map = {k: v[:] for k, v in free_blocks_map.items()}
-    sorted_dates = sorted(free_map.keys())
+    # 4. Schedule Floating Tasks
+    sessions_to_schedule = []
+    if not floating_tasks_df.empty:
+        # Break tasks into sessions
+        for _, row in floating_tasks_df.iterrows():
+            total_time = row.get("time_spent_hours", 2.0) * 60
+            n_sessions = int(row.get("sessions_needed", 1))
+            
+            # Avoid divide by zero
+            n_sessions = max(1, n_sessions)
+            session_dur = int(total_time / n_sessions)
+            
+            for i in range(n_sessions):
+                sessions_to_schedule.append({
+                    "assignment_id": row.get("assignment_id"),
+                    "assignment_name": row.get("assignment_name"),
+                    "class_name": row.get("class_name"),
+                    "assignment_type": row.get("assignment_type"),
+                    "due_date": row["due_dates"],
+                    "duration_minutes": session_dur
+                })
+        
+        # Sort by due date
+        sessions_to_schedule.sort(key=lambda x: x["due_date"])
 
-    for session in sessions:
-        placed = False
-        duration_mins = session["duration_minutes"]
-        duration = timedelta(minutes=duration_mins)
-
-        for d in sorted_dates:
-            # 1. Check Due Date, Daily Time Limit, and DAILY SESSION LIMIT <-- MODIFIED CHECK
-            if d > session["due_date"]: 
-                break
-            if daily_usage_minutes[d] + duration_mins > max_minutes: 
-                continue
-            if daily_session_count[d] >= max_sessions_per_day: # <-- NEW CONSTRAINT
-                continue
-
-            day_blocks = free_map[d]
-            for i, (start, end) in enumerate(day_blocks):
+        # Run "Tetris" Logic
+        daily_mins = defaultdict(int)
+        MAX_DAILY_MINS = 8 * 60
+        
+        # Deep copy free blocks
+        available = {k: v[:] for k, v in free_blocks.items()}
+        sorted_days = sorted(available.keys())
+        
+        for sess in sessions_to_schedule:
+            placed = False
+            dur = timedelta(minutes=sess["duration_minutes"])
+            
+            for day in sorted_days:
+                if day > sess["due_date"].date(): break # Can't do after due date
+                if daily_mins[day] + sess["duration_minutes"] > MAX_DAILY_MINS: continue
                 
-                # Required duration includes the session time PLUS the post-session break
-                required_block_duration = duration + break_duration
-                block_duration = end - start
-                
-                if block_duration >= required_block_duration:
-                    session_start = start
-                    session_end = start + duration
+                day_slots = available[day]
+                for i, (s, e) in enumerate(day_slots):
+                    if (e - s) >= dur:
+                        # Schedule it!
+                        scheduled_tasks.append({
+                            "assignment_name": sess["assignment_name"],
+                            "class_name": sess["class_name"],
+                            "assignment_type": sess["assignment_type"],
+                            "start": s,
+                            "end": s + dur
+                        })
+                        
+                        # Update trackers
+                        daily_mins[day] += sess["duration_minutes"]
+                        placed = True
+                        
+                        # Slice the block
+                        new_start = s + dur + timedelta(minutes=15) # Add break
+                        if new_start < e:
+                            available[day][i] = (new_start, e)
+                        else:
+                            available[day].pop(i)
+                        break
+                if placed: break
+            
+            if not placed:
+                unscheduled_tasks.append(sess)
 
-                    # 2. Schedule the Session
-                    rec = session.copy()
-                    rec["start"] = session_start
-                    rec["end"] = session_end
-                    rec["date"] = d
-                    scheduled.append(rec)
-                    
-                    # 3. Update Daily Trackers
-                    daily_usage_minutes[d] += duration_mins
-                    daily_session_count[d] += 1 # <-- INCREMENT COUNTER
-
-                    # 4. Calculate New Free Block Start (Includes Break)
-                    new_start = session_end + break_duration 
-
-                    if new_start < end:
-                        # The block has remaining time after the session and break
-                        free_map[d][i] = (new_start, end)
-                    else:
-                        # The session and break consumed the entire block
-                        free_map[d].pop(i)
-                    
-                    placed = True
-                    break
-                    
-            if placed: 
-                break
-
-        if not placed:
-            unscheduled.append(session)
-
-    return scheduled, unscheduled
-# def schedule_sessions_load_balanced(free_blocks_map, sessions, max_hours_per_day=24):
-#     scheduled = []
-#     unscheduled = []
-#     daily_usage_minutes = defaultdict(float)
-#     max_minutes = max_hours_per_day * 60
-
-#     free_map = {k: v[:] for k, v in free_blocks_map.items()}
-#     sorted_dates = sorted(free_map.keys())
-
-#     for session in sessions:
-#         placed = False
-#         duration_mins = session["duration_minutes"]
-#         duration = timedelta(minutes=duration_mins)
-
-#         for d in sorted_dates:
-#             if d > session["due_date"]: break
-#             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
-
-#             day_blocks = free_map[d]
-#             for i, (start, end) in enumerate(day_blocks):
-#                 block_duration = end - start
-#                 if block_duration >= duration:
-#                     session_start = start
-#                     session_end = start + duration
-
-#                     rec = session.copy()
-#                     rec["start"] = session_start
-#                     rec["end"] = session_end
-#                     rec["date"] = d
-#                     scheduled.append(rec)
-                    
-#                     daily_usage_minutes[d] += duration_mins
-
-#                     new_start = session_end
-#                     if new_start < end:
-#                         free_map[d][i] = (new_start, end)
-#                     else:
-#                         free_map[d].pop(i)
-#                     placed = True
-#                     break
-#             if placed: break
-
-#         if not placed:
-#             unscheduled.append(session)
-
-#     return scheduled, unscheduled
-
-# ==========================================================
-# BLOCK 6: OUTPUT GENERATOR
-# ==========================================================
-def create_output_ics(scheduled_tasks, output_path):
+    # 5. Output ICS
+    timestamp = int(datetime.now().timestamp())
+    filename = f"optimized_schedule_{timestamp}.ics"
+    out_path = os.path.join(output_folder, filename)
+    
     cal = Calendar()
     cal.add('prodid', '-//StudentOS Scheduler//mxm.dk//')
     cal.add('version', '2.0')
 
-    for task in scheduled_tasks:
-        event = Event()
-        start = task['start']
-        end = task['end']
+    for t in scheduled_tasks:
+        e = Event()
+        e.add('summary', f"Do: {t['assignment_name']}")
+        e.add('dtstart', t['start'])
+        e.add('dtend', t['end'])
+        desc = f"Class: {t.get('class_name','')}\nType: {t.get('assignment_type','')}"
+        e.add('description', desc)
+        cal.add_component(e)
         
-        if isinstance(start, str): start = datetime.fromisoformat(start)
-        if isinstance(end, str): end = datetime.fromisoformat(end)
-
-        event.add('summary', f"Study: {task['assignment_name']}")
-        event.add('dtstart', start)
-        event.add('dtend', end)
-        event.add('description', f"Course: {task.get('class_name','')}\nType: {task.get('assignment_type','')}")
-        
-        cal.add_component(event)
-
-    with open(output_path, 'wb') as f:
+    with open(out_path, 'wb') as f:
         f.write(cal.to_ical())
-    
-    return output_path
-
-# ==========================================================
-# MAIN PROCESSOR
-# ==========================================================
-def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
-    # 1. Parse Inputs
-    local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
-
-    # 2. Calculate Free Time
-    free_blocks = generate_free_blocks_engine(local_tz, work_windows, df_assignments, uploaded_files_bytes)
-
-    # 3. Create Session Chunks
-    all_sessions = generate_sessions_from_assignments(df_assignments)
-    
-    # Set your desired limits here, added this 
-    MAX_DAILY_HOURS = 8
-    BREAK_MINUTES = 15
-    MAX_DAILY_SESSIONS = 3 
-     # 4. Schedule
-    scheduled, unscheduled = schedule_sessions_load_balanced(
-        free_blocks, 
-        all_sessions, 
-        max_hours_per_day=MAX_DAILY_HOURS,
-        break_minutes=BREAK_MINUTES,
-        max_sessions_per_day=MAX_DAILY_SESSIONS
-    )
-    #scheduled, unscheduled = schedule_sessions_load_balanced(free_blocks, all_sessions)
-
-    # 5. Generate ICS File
-    timestamp = int(datetime.now().timestamp())
-    filename = f"optimized_schedule_{timestamp}.ics"
-    output_path = os.path.join(output_folder, filename)
-    
-    create_output_ics(scheduled, output_path)
 
     return {
         "status": "success",
         "ics_filename": filename,
-        "scheduled_count": len(scheduled),
-        "unscheduled_count": len(unscheduled)
+        "scheduled_count": len(scheduled_tasks),
+        "unscheduled_count": len(unscheduled_tasks)
     }
