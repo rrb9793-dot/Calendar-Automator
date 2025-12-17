@@ -10,6 +10,14 @@ import recurring_ical_events
 from collections import defaultdict
 
 # ==========================================================
+# 🔧 DEMO SWITCH (TIME TRAVEL)
+# ==========================================================
+# Set this to a date string (e.g., "2025-09-01") to pretend it is that day.
+# Set to None to use the actual real-world date.
+DEMO_START_DATE = "2025-09-01" 
+# DEMO_START_DATE = None 
+
+# ==========================================================
 # BLOCK 1 & 2: INPUT PARSER
 # ==========================================================
 def parse_request_inputs(json_data):
@@ -169,14 +177,22 @@ def add_buffer_to_busy_timeline(busy_timeline, buffer_minutes=15):
     buffered = [(s - delta, e + delta) for (s, e) in busy_timeline]
     return merge_busy_blocks(buffered, join_touching=True)
 
-def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, local_tz):
+def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, local_tz, current_simulated_dt):
+    """
+    Constructs free time blocks.
+    Uses 'current_simulated_dt' instead of real 'now' to allow time travel.
+    """
     FREE_BLOCKS = {}
     current_date = horizon_start.date()
-    now = datetime.now(local_tz)
+    
+    # Use the passed-in "Now" (which might be the demo date)
+    now = current_simulated_dt
     
     while current_date <= horizon_end.date():
         day_start_cal = datetime.combine(current_date, time.min).replace(tzinfo=local_tz)
         effective_start = max(day_start_cal, horizon_start)
+        
+        # Clip to "Now" if we are on the starting day
         if current_date == now.date():
              effective_start = max(effective_start, now)
         
@@ -261,7 +277,7 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "class_name": c_name,
                 "duration_minutes": dur,
                 "due_date": effective_due, 
-                "full_due_dt": row["due_dates"], # Keeping the REAL deadline here for display
+                "full_due_dt": row["due_dates"], 
                 "is_overdue": is_overdue, 
                 "field_of_study": row.get("field_of_study", ""),
                 "assignment_type": row.get("assignment_type", "")
@@ -413,7 +429,19 @@ def create_output_ics(scheduled_tasks, output_path):
 def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
 
-    today_dt = datetime.now(local_tz)
+    # ==========================================
+    # ⏳ TIME TRAVEL LOGIC
+    # ==========================================
+    if DEMO_START_DATE:
+        print(f"🔮 DEMO MODE: Time traveling to {DEMO_START_DATE}")
+        # Parse the demo date
+        demo_dt = datetime.fromisoformat(DEMO_START_DATE)
+        # Combine with current time of day to make it realistic, or set to morning
+        today_dt = datetime.combine(demo_dt.date(), datetime.now().time()).replace(tzinfo=local_tz)
+    else:
+        today_dt = datetime.now(local_tz)
+    # ==========================================
+
     horizon_start = datetime.combine(today_dt.date(), time.min).replace(tzinfo=local_tz)
     horizon_end = horizon_start + timedelta(days=30)
     
@@ -453,7 +481,9 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
 
     merged_busy = merge_busy_blocks(busy_blocks, join_touching=True)
     buffered_busy = add_buffer_to_busy_timeline(merged_busy, buffer_minutes=15)
-    free_blocks = build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz)
+    
+    # PASS THE SIMULATED DATE HERE
+    free_blocks = build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz, today_dt)
     
     floating_sessions = generate_sessions_from_assignments(floating_df, today_dt.date())
 
