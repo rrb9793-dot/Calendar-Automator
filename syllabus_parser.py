@@ -7,209 +7,95 @@ from datetime import datetime
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted
 
-# --- CONFIGURATION ---
 DEFAULT_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# --- HELPER: STRICT STANDARDIZATION (24-HOUR FORMAT) ---
 def standardize_time(time_str):
-    """Converts various time formats to strictly HH:MM (24-hour)."""
     if not time_str: return None
-    
     clean = re.split(r'\s*[-–]\s*|\s+to\s+', str(time_str))[0].strip()
-    
-    formats = [
-        "%I:%M %p", "%I %p", "%H:%M", "%I:%M%p", "%I%p"
-    ]
-    
+    formats = ["%I:%M %p", "%I %p", "%H:%M", "%I:%M%p", "%I%p"]
     for fmt in formats:
-        try:
-            return datetime.strptime(clean, fmt).strftime("%H:%M")
-        except ValueError:
-            continue
-            
+        try: return datetime.strptime(clean, fmt).strftime("%H:%M")
+        except: continue
     if clean.isdigit():
         val = int(clean)
         if 7 <= val <= 11: return f"{val:02d}:00"
         if 1 <= val <= 6:  return f"{val+12:02d}:00"
         if val == 12:      return "12:00"
-        
     return None 
 
 def resolve_time(row, schedule_map):
-    """Determines the best time for an assignment based on class schedule."""
-    existing_time = row.get('Time')
-    
-    if existing_time and any(char.isdigit() for char in str(existing_time)):
-        std = standardize_time(existing_time)
-        if std: return std
-
+    if row.get('Time') and any(c.isdigit() for c in str(row['Time'])):
+        t = standardize_time(row['Time'])
+        if t: return t
     try:
         if pd.notna(row['Date']):
-            date_obj = pd.to_datetime(row['Date'])
-            day_name = date_obj.strftime('%A') 
-            if day_name in schedule_map:
-                return schedule_map[day_name]
-    except:
-        pass
-
+            day = pd.to_datetime(row['Date']).strftime('%A')
+            if day in schedule_map: return schedule_map[day]
+    except: pass
     return "23:59"
 
-# --- PARSING ENGINE ---
 def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
     print(f"--- 🚀 STARTED PARSING: {os.path.basename(pdf_path)} ---", flush=True)
-
-    active_key = api_key if api_key else DEFAULT_API_KEY
-    if not active_key:
-        print("❌ Error: No GEMINI_API_KEY found.", flush=True)
-        return None
-
-    genai.configure(api_key=active_key)
+    genai.configure(api_key=api_key or DEFAULT_API_KEY)
 
     try:
-        # 1. UPLOAD
-        print("... Uploading file to Gemini...", flush=True)
-        sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
+        f = genai.upload_file(path=pdf_path, display_name="Syllabus")
+        while f.state.name == "PROCESSING": time.sleep(1); f = genai.get_file(f.name)
         
-        while sample_file.state.name == "PROCESSING":
-            time.sleep(1)
-            sample_file = genai.get_file(sample_file.name)
-            
-        if sample_file.state.name != "ACTIVE":
-            print(f"❌ File processing failed: {sample_file.state.name}", flush=True)
-            return None
-        
-        print("... File Active. Sending Prompt...", flush=True)
-
-        # 2. PROMPT
-        prompt = """
-        Extract all assignments, exams, and due dates from this syllabus into JSON.
-        
-        Output format:
-        {
-            "metadata": {
-                "course_name": "string (The official name of the course found in the header)",
-                "class_meetings": [ {"days": ["Monday"], "start_time": "14:00"} ]
-            },
-            "assignments": [
-                {
-                    "date": "YYYY-MM-DD",
-                    "time": "HH:MM", 
-                    "assignment_name": "string",
-                    "category": "STRICT_CATEGORY_STRING",
-                    "description": "string"
-                }
-            ]
-        }
-        
-        Rules:
-        1. Dates MUST be YYYY-MM-DD.
-        2. Times MUST be 24-hour format (HH:MM) if available. If not, null.
-        3. "category" MUST be one of the following strings EXACTLY:
-           - "Exam" (Midterms, Finals, Quizzes)
-           - "Problem Set"
-           - "Coding Assignment"
-           - "Research Paper"
-           - "Creative Writing/Essay"
-           - "Presentation"
-           - "Modeling"
-           - "Discussion Post"
-           - "Readings"
-           - "Case Study"
+        prompt = """Extract assignments/exams into JSON.
+        Format: { "metadata": { "course_name": "string", "class_meetings": [{"days": ["Monday"], "start_time": "14:00"}] }, "assignments": [ { "date": "YYYY-MM-DD", "time": "HH:MM", "assignment_name": "string", "category": "STRICT_CATEGORY" } ] }
+        Rules: 
+        1. Dates: YYYY-MM-DD. 
+        2. Times: 24h (HH:MM) or null.
+        3. Category MUST be exactly: "Exam", "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study".
         """
-
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        max_retries = 3
-        response = None
-
-        for attempt in range(max_retries):
-            try:
-                response = model.generate_content(
-                    [sample_file, prompt],
-                    generation_config={"response_mime_type": "application/json"}
-                )
-                break 
-            except ResourceExhausted:
-                print(f"⚠️ Quota hit. Retrying in 5s... ({attempt+1}/{max_retries})", flush=True)
-                time.sleep(5)
-            except Exception as e:
-                print(f"❌ GenAI Error: {e}", flush=True)
-                return None
         
-        if not response: 
-            print("❌ No response received from Gemini.", flush=True)
-            return None
-
-        try:
-            data = json.loads(response.text)
-        except:
-            print("❌ Failed to parse JSON response", flush=True)
-            return None
-
-        if isinstance(data, list):
-            data = {"assignments": data, "metadata": {}}
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        for _ in range(3):
+            try:
+                resp = model.generate_content([f, prompt], generation_config={"response_mime_type": "application/json"})
+                break
+            except ResourceExhausted: time.sleep(5)
+            except: return None
+        
+        if not resp: return None
+        data = json.loads(resp.text)
+        if isinstance(data, list): data = {"assignments": data, "metadata": {}}
         
         meta = data.get("metadata", {})
-        
-        # EXTRACT COURSE NAME FROM AI METADATA
-        course_name = meta.get("course_name", "Unknown Course")
-        print(f"--- METADATA FOUND: Course={course_name} ---", flush=True)
+        course = meta.get("course_name", "Unknown Course")
+        print(f"--- METADATA: Course={course} ---", flush=True)
 
-        schedule_map = {}
-        for meeting in meta.get("class_meetings", []):
-            raw_time = meeting.get("start_time", "")
-            std_time = standardize_time(raw_time)
-            days = meeting.get("days", [])
-            if isinstance(days, str): days = [days]
-            if std_time:
-                for day in days:
-                    for full_day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
-                        if full_day.lower() in str(day).lower():
-                            schedule_map[full_day] = std_time
+        sched_map = {}
+        for m in meta.get("class_meetings", []):
+            t = standardize_time(m.get("start_time", ""))
+            days = m.get("days", [])
+            if t:
+                for d in (days if isinstance(days, list) else [days]):
+                    for fd in ['Monday','Tuesday','Wednesday','Thursday','Friday']:
+                        if fd.lower() in str(d).lower(): sched_map[fd] = t
 
         rows = []
-        for item in data.get("assignments", []):
+        for i in data.get("assignments", []):
             rows.append({
-                "Course": course_name, 
-                "Date": item.get("date"),
-                "Time": item.get("time"), 
-                "Category": item.get("category", "Other"),
-                "Assignment": item.get("assignment_name", "Untitled"),
-                "Description": item.get("description", "")
+                "Course": course, "Date": i.get("date"), "Time": i.get("time"),
+                "Category": i.get("category", "p_set"), "Assignment": i.get("assignment_name", "Untitled")
             })
             
         df = pd.DataFrame(rows)
-        if df.empty: 
-            print("⚠️ Parsed DataFrame is Empty.", flush=True)
-            return df
-
+        if df.empty: return df
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
         df = df.dropna(subset=['Date'])
-        
-        df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
-
-        # Append Course Name to Assignment
-        df['Assignment'] = df.apply(
-            lambda row: f"{row['Assignment']} ({row['Course']})", axis=1
-        )
-
+        df['Time'] = df.apply(lambda r: resolve_time(r, sched_map), axis=1)
+        df['Assignment'] = df.apply(lambda r: f"{r['Assignment']} ({r['Course']})", axis=1)
         return df
 
     except Exception as e:
-        print(f"❌ Critical Parsing Error: {e}", flush=True)
+        print(f"❌ Error: {e}", flush=True)
         return None
 
-# --- CONSOLIDATION ---
 def consolidate_assignments(df):
     if df.empty: return df
-
-    group_cols = ['Course', 'Date', 'Time', 'Category']
-    
-    def merge_unique(series):
-        return " / ".join(sorted(set(str(s) for s in series if s)))
-
-    df_consolidated = df.groupby(group_cols).agg({
-        'Assignment': merge_unique,
-        'Description': merge_unique
-    }).reset_index()
-    
-    return df_consolidated.sort_values(by=['Date', 'Time'])
+    return df.groupby(['Course', 'Date', 'Time', 'Category']).agg({
+        'Assignment': lambda x: " / ".join(sorted(set(str(s) for s in x if s)))
+    }).reset_index().sort_values(by=['Date', 'Time'])
