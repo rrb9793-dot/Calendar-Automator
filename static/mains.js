@@ -14,7 +14,7 @@ const LOCATIONS = ["At home/private setting", "School/library", "Other public se
 
 // --- MAIN INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("🚀 StudentOS Frontend Initialized");
+    console.log("🚀 ParselAI Frontend Initialized");
 
     // 1. Populate Dropdowns
     const majorSel = document.getElementById('major');
