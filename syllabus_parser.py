@@ -42,6 +42,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         f = genai.upload_file(path=pdf_path, display_name="Syllabus")
         while f.state.name == "PROCESSING": time.sleep(1); f = genai.get_file(f.name)
         
+        # UPDATED PROMPT: Added "recommended_sessions" request
         prompt = """Extract metadata and assignments from this syllabus into JSON.
         Output format:
         {
@@ -55,15 +56,17 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                     "date": "YYYY-MM-DD",
                     "time": "HH:MM", 
                     "assignment_name": "string",
-                    "category": "STRICT_CATEGORY" 
+                    "category": "STRICT_CATEGORY",
+                    "recommended_sessions": "integer (1-5)"
                 }
             ]
         }
         Rules:
         1. "field_of_study" MUST be one of: "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", "Social Sciences", "Arts & Humanities", "Health & Education".
         2. "category" MUST be one of: "Exam", "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study".
-        3. Dates YYYY-MM-DD. Times 24h.
-        4. IGNORE holidays, breaks, or "No Class" entries.
+        3. "recommended_sessions": Estimate the number of separate work sessions needed based on difficulty. (e.g. Quizzes/Readings = 1, Problem Sets = 2, Exams/Papers = 3 or 4).
+        4. Dates YYYY-MM-DD. Times 24h.
+        5. IGNORE holidays, breaks, or "No Class" entries.
         """
         
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -95,10 +98,12 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
 
         rows = []
         for i in data.get("assignments", []):
-            # 1. IMMEDIATE FILTER: Skip blank names
             name = i.get("assignment_name", "").strip()
             if not name or name.lower() in ["untitled", "no class", "no class."]:
                 continue
+
+            # Extract sessions, defaulting to 1
+            rec_sessions = int(i.get("recommended_sessions", 1))
                 
             rows.append({
                 "Course": course, 
@@ -106,7 +111,8 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                 "Date": i.get("date"), 
                 "Time": i.get("time"),
                 "Category": i.get("category", "p_set"), 
-                "Assignment": name
+                "Assignment": name,
+                "Sessions": rec_sessions
             })
             
         df = pd.DataFrame(rows)
@@ -114,25 +120,17 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
         
-        # --- 2. SEQUENTIAL RENAMING (The Fix) ---
-        # Sort by date so "Assignment 1" is actually the first one
+        # Sequentially number duplicates
         df = df.sort_values(by='Date')
-        
-        # Identify duplicates
-        # We group by the 'Assignment' name. If a name appears >1 time, we number them.
         name_counts = df['Assignment'].value_counts()
         duplicates = name_counts[name_counts > 1].index
-        
-        # Create a tracker for names we've seen
         seen_counts = {}
         
         def rename_duplicates(row):
             name = row['Assignment']
             if name in duplicates:
-                if name not in seen_counts:
-                    seen_counts[name] = 1
-                else:
-                    seen_counts[name] += 1
+                if name not in seen_counts: seen_counts[name] = 1
+                else: seen_counts[name] += 1
                 return f"{name} {seen_counts[name]}"
             return name
 
@@ -159,7 +157,8 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
 
 def consolidate_assignments(df):
     if df.empty: return df
-    # Since we made names unique (seq numbering), we group by the FULL name now
+    # Consolidate and preserve the MAX session count for duplicates
     return df.groupby(['Course', 'Field', 'Date', 'Time', 'Category']).agg({
-        'Assignment': lambda x: " / ".join(sorted(set(str(s) for s in x if s)))
+        'Assignment': lambda x: " / ".join(sorted(set(str(s) for s in x if s))),
+        'Sessions': 'max'
     }).reset_index().sort_values(by=['Date', 'Time'])
