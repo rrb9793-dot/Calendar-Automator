@@ -42,6 +42,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         f = genai.upload_file(path=pdf_path, display_name="Syllabus")
         while f.state.name == "PROCESSING": time.sleep(1); f = genai.get_file(f.name)
         
+        # Strict Prompt with 'Exam' included
         prompt = """Extract assignments/exams into JSON.
         Format: { "metadata": { "course_name": "string", "class_meetings": [{"days": ["Monday"], "start_time": "14:00"}] }, "assignments": [ { "date": "YYYY-MM-DD", "time": "HH:MM", "assignment_name": "string", "category": "STRICT_CATEGORY" } ] }
         Rules: 
@@ -87,6 +88,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
         df = df.dropna(subset=['Date'])
         df['Time'] = df.apply(lambda r: resolve_time(r, sched_map), axis=1)
+        # Auto-append Course Name
         df['Assignment'] = df.apply(lambda r: f"{r['Assignment']} ({r['Course']})", axis=1)
         return df
 
