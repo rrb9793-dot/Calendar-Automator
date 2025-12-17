@@ -23,7 +23,7 @@ def parse_request_inputs(json_data):
     ww = user_prefs.get("work_windows", {})
     work_windows = {}
 
-    # Defaults
+    # Defaults - Handle strings or floats
     wd_start = float(ww.get("weekday_start_hour", 9))
     wd_end   = float(ww.get("weekday_end_hour", 21))
     we_start = float(ww.get("weekend_start_hour", 10))
@@ -65,8 +65,9 @@ def parse_request_inputs(json_data):
 
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
+        # Clean Numbers
         if "time_spent_hours" in df_assignments.columns:
-            df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"])
+            df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"], errors='coerce').fillna(2.0)
         else:
             df_assignments["time_spent_hours"] = 2.0 
 
@@ -169,13 +170,22 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
     FREE_BLOCKS = {}
     current_date = horizon_start.date()
     
+    # 🛑 CRITICAL FIX: Get "Now" to prevent scheduling in the past
+    now = datetime.now(local_tz)
+    
     while current_date <= horizon_end.date():
         day_start_cal = datetime.combine(current_date, time.min).replace(tzinfo=local_tz)
         
         effective_start = max(day_start_cal, horizon_start)
+        
+        # 🛑 FIX: If today, clip start to NOW so we don't book 3 PM when it's 5 PM
+        if current_date == now.date():
+             effective_start = max(effective_start, now)
+        
         current_day_start = effective_start
         current_day_end = min(day_start_cal + timedelta(days=1), horizon_end)
 
+        # If effective start (now) is past the end of the day, skip
         if current_day_start >= current_day_end:
             current_date += timedelta(days=1); continue
 
@@ -194,8 +204,11 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
         for start_hour, end_hour in day_work_windows:
             w_start_cal = day_start_cal + timedelta(hours=float(start_hour))
             w_end_cal = day_start_cal + timedelta(hours=float(end_hour))
+            
+            # Clip window to "Now" and "Horizon"
             w_actual_start = max(w_start_cal, current_day_start)
             w_actual_end = min(w_end_cal, current_day_end)
+            
             if w_actual_start < w_actual_end:
                 day_free.extend(subtract_busy_from_window(w_actual_start, w_actual_end, day_busy))
 
@@ -310,6 +323,57 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
     return scheduled, unscheduled
 
 # ==========================================================
+# BLOCK 4.5: POST-PROCESSING (Merge Blocks)
+# ==========================================================
+def merge_contiguous_sessions(scheduled_sessions):
+    """
+    Merges back-to-back sessions of the same assignment to clean up the calendar.
+    Restored from Notebook Version 2.0.
+    """
+    if not scheduled_sessions:
+        return []
+
+    # Sort by start time to ensure we process in order
+    sorted_sessions = sorted(scheduled_sessions, key=lambda x: x["start"])
+    merged = []
+
+    current_block = sorted_sessions[0]
+
+    for next_block in sorted_sessions[1:]:
+        same_assignment = (current_block["assignment_name"] == next_block["assignment_name"])
+        
+        # Check if they are effectively touching (ignoring small break gaps if needed, 
+        # but here we check strict end==start or very close)
+        # Since we added breaks, they won't be EXACTLY touching usually, 
+        # BUT if the user wants them separate, we keep them separate.
+        # This function is mostly useful if we split a long task into chunks artificially.
+        
+        # NOTE: If we inserted breaks, we might NOT want to merge them unless we want to hide the breaks.
+        # Assuming we want to merge if they are the SAME task and strictly adjacent (no break).
+        # For this logic, we will check if "start" of next is "end" of current.
+        
+        # However, our scheduler inserts breaks. 
+        # So we only merge if the scheduler put them back-to-back (which it rarely does with break logic).
+        # BUT, if you used Fixed Events or manual splitting, this is useful.
+        
+        # To make the calendar cleaner, we can merge if they are the same assignment 
+        # and on the same day.
+        
+        touching_time = (current_block["end"] == next_block["start"])
+        same_day = (current_block["start"].date() == next_block["start"].date())
+
+        if same_assignment and same_day and touching_time:
+            # EXTEND current block
+            current_block["end"] = next_block["end"]
+            current_block["duration_minutes"] += next_block["duration_minutes"]
+        else:
+            merged.append(current_block)
+            current_block = next_block
+
+    merged.append(current_block)
+    return merged
+
+# ==========================================================
 # BLOCK 5: OUTPUT GENERATOR
 # ==========================================================
 def create_output_ics(scheduled_tasks, output_path):
@@ -382,6 +446,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
                 "assignment_type": row.get("assignment_type"),
                 "start": start_time,
                 "end": end_time,
+                "duration_minutes": dur * 60, # Added for merger
                 "is_exam": True # Flag for ICS generator
             })
 
@@ -421,12 +486,16 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     # 8. Combine Fixed + Floating for Final Output
     all_scheduled = fixed_tasks + scheduled_floating
     
-    # 9. Generate ICS
+    # 9. MERGE CONTIGUOUS BLOCKS (The Polish Step)
+    # This prevents "calendar spam" by merging back-to-back blocks of same task
+    final_optimized = merge_contiguous_sessions(all_scheduled)
+    
+    # 10. Generate ICS
     timestamp = int(datetime.now().timestamp())
     filename = f"optimized_schedule_{timestamp}.ics"
     output_path = os.path.join(output_folder, filename)
     
-    create_output_ics(all_scheduled, output_path)
+    create_output_ics(final_optimized, output_path)
 
     return {
         "status": "success",
