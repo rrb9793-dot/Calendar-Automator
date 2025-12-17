@@ -85,7 +85,7 @@ def generate_schedule():
         # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries [UPDATED NAMING CONVENTION]
+        # A. Manual Entries (USER INPUTS REIGN SUPREME HERE)
         for course in manual_courses:
             assign_name = course.get('assignment_name', 'Untitled')
             course_field = course.get('field_of_study', 'General')
@@ -97,8 +97,10 @@ def generate_schedule():
                 "source_type": "manual",
                 "Assignment": final_name, 
                 "Date": course.get('due_date'),
+                # For manual tasks, we assume user input due time or default to end of day
                 "Time": "23:59", 
                 "Course": course_field,
+                "Category": course.get('assignment_type', 'p_set'),
                 "raw_details": course 
             })
 
@@ -111,7 +113,7 @@ def generate_schedule():
             
             for i in range(pdf_count):
                 pdf = request.files.get(f'pdf_{i}')
-                course_name = request.form.get(f'course_name_{i}', 'Unknown Course')
+                # We NO LONGER check for manual course_name here.
                 
                 if not pdf or pdf.filename == '': continue
                 
@@ -120,10 +122,9 @@ def generate_schedule():
                 pdf.save(path)
                 
                 try:
-                    # Parser will now append (Course Name) automatically
-                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
+                    # Parse using AI for course name
+                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                     
-                    # =========== LOGGING START (ADDED) ===========
                     print(f"\n--- 📄 PARSER RESULT FOR: {filename} ---", flush=True)
                     if df is not None and not df.empty:
                         # .to_string() forces the logs to show the WHOLE table
@@ -131,35 +132,16 @@ def generate_schedule():
                     else:
                         print("❌ Parser returned EMPTY or NONE.", flush=True)
                     print("------------------------------------------\n", flush=True)
-                    # =========== LOGGING END =====================
 
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     time.sleep(2) 
                 
-                except TypeError as te:
-                    print(f"Warning: syllabus_parser outdated. {te}", flush=True)
-                    # Fallback logic
-                    df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
-                    if df is not None and not df.empty:
-                        df['Course'] = course_name
-                        # Fallback append if parser is old
-                        df['Assignment'] = df['Assignment'] + f" ({course_name})"
-                        
-                        # Log the fallback result too
-                        print(f"--- (Fallback) PARSER RESULT FOR: {filename} ---", flush=True)
-                        print(df.to_string(), flush=True)
-                        print("------------------------------------------\n", flush=True)
-                        
-                        pdf_dfs.append(df)
-
                 except ResourceExhausted:
                     print("❌ Google AI Quota Exceeded.", flush=True)
                     return jsonify({'error': 'Google AI Quota Exceeded. Please wait.'}), 429
                 except Exception as e:
                     print(f"❌ Error processing {filename}: {e}", flush=True)
-                    import traceback
-                    traceback.print_exc()
                     continue
             
             if pdf_dfs:
@@ -172,40 +154,74 @@ def generate_schedule():
         # 3. PREDICTION & DB SAVE
         formatted_assignments = []
         
+        # Hard PDF tasks that get 2 sessions by default
+        HARD_TASKS = ['Problem Set', 'Coding Assignment', 'Research Paper', 'Modeling', 'Case Study']
+        
         for i, item in enumerate(all_assignments):
-            if item["source_type"] == "manual":
-                assignment_details = item["raw_details"]
-            else:
-                assignment_details = {
-                    "assignment_name": item.get("Assignment", "Untitled"),
-                    "work_sessions": 1,
-                    "assignment_type": item.get('Category', 'p_set'), 
-                    "field_of_study": survey_data.get('major', 'Business'),
-                    "external_resources": 'Google/internet',
-                    "work_location": 'School/library',
-                    "work_in_group": 'No',
-                    "submitted_in_person": 'No'
-                }
-
-            predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
+            category = item.get('Category', 'p_set')
             
-            if item["source_type"] == "manual" and survey_data.get('email'):
-                db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
+            # --- BRANCH 1: MANUAL (User overrides everything) ---
+            if item["source_type"] == "manual":
+                raw = item["raw_details"]
+                
+                # Use User's exact inputs
+                assignment_details = raw 
+                
+                # Predict time (Manual tasks always go through predictor)
+                predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
+                
+                # Manual inputs for sessions
+                sessions_needed = int(raw.get('work_sessions', 1))
+                is_fixed_event = False # Manual tasks are "To-Dos", not fixed events
 
+                if survey_data.get('email'):
+                    db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
+
+            # --- BRANCH 2: PDF (Apply defaults) ---
+            else:
+                is_exam = (category == "Exam")
+                
+                # Defaults for PDF
+                if is_exam:
+                    sessions_needed = 1
+                    predicted_hours = 1.25 # Default 1.25 hours (75 mins) for Exams
+                    is_fixed_event = True  # <--- CRITICAL: Tells calendar this is a specific time
+                else:
+                    sessions_needed = 2 if category in HARD_TASKS else 1
+                    is_fixed_event = False
+                    
+                    # Construct details for predictor (Assumes Home/Google)
+                    assignment_details = {
+                        "assignment_name": item.get("Assignment", "Untitled"),
+                        "work_sessions": sessions_needed,
+                        "assignment_type": category, 
+                        "field_of_study": survey_data.get('major', 'Business'),
+                        "external_resources": 'Google/internet',       # Default
+                        "work_location": 'At home/private setting',    # Default
+                        "work_in_group": 'No',
+                        "submitted_in_person": 'No'
+                    }
+                    predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
+
+            # Formatting
             date_str = item.get("Date")
             time_str = item.get("Time")
-            if not time_str: time_str = "11:59 PM"
+            
+            # If no time, manual default to end of day.
+            # If parser didn't find time for Exam, it defaults to 23:59 (imperfect, but safe).
+            if not time_str: time_str = "23:59"
+            
             full_due_string = f"{date_str} {time_str}"
             
             formatted_assignments.append({
                 "id": f"assign_{i}",
-                # The name here already has the course appended!
                 "name": item.get("Assignment", "Untitled Task"),
                 "class_name": item.get("Course", "General"),
                 "due_date": full_due_string, 
                 "time_estimate": float(predicted_hours), 
-                "sessions_needed": int(assignment_details.get('work_sessions', 1)),
-                "assignment_type": assignment_details.get('assignment_type', 'p_set')
+                "sessions_needed": sessions_needed,
+                "assignment_type": category,
+                "is_fixed_event": is_fixed_event # <--- New Flag passed to Calendar Maker
             })
 
         # 4. CALENDAR GENERATION
