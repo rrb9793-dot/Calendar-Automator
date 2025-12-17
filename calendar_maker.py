@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import math
 import os
+import re
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 from icalendar import Calendar, Event
@@ -77,6 +78,10 @@ def parse_request_inputs(json_data):
 
         if "is_fixed_event" not in df_assignments.columns:
             df_assignments["is_fixed_event"] = False
+            
+        # Ensure class_name exists
+        if "class_name" not in df_assignments.columns:
+            df_assignments["class_name"] = "General"
 
     else:
         df_assignments = pd.DataFrame()
@@ -167,15 +172,11 @@ def add_buffer_to_busy_timeline(busy_timeline, buffer_minutes=15):
 def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, local_tz):
     FREE_BLOCKS = {}
     current_date = horizon_start.date()
-    
-    # CRITICAL: Get "Now" to prevent scheduling in the past
     now = datetime.now(local_tz)
     
     while current_date <= horizon_end.date():
         day_start_cal = datetime.combine(current_date, time.min).replace(tzinfo=local_tz)
         effective_start = max(day_start_cal, horizon_start)
-        
-        # Clip to Now if Today
         if current_date == now.date():
              effective_start = max(effective_start, now)
         
@@ -213,12 +214,14 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
 # ==========================================================
 # BLOCK 3: SESSION GENERATOR (WITH PRIORITY SORTING)
 # ==========================================================
+def extract_class_from_title(title):
+    # Try to grab text inside parens e.g. "Draft 1 (Commerce)" -> "Commerce"
+    match = re.search(r'\((.*?)\)', title)
+    if match:
+        return match.group(1).strip()
+    return "General"
+
 def generate_sessions_from_assignments(df_assignments, current_date):
-    """
-    Splits assignments into sessions and sorts them by PRIORITY.
-    Priority 1: Future Deadlines (Save the grade!)
-    Priority 2: Overdue/Late Deadlines (Catch up later)
-    """
     sessions = []
     if df_assignments.empty: return sessions
 
@@ -231,20 +234,22 @@ def generate_sessions_from_assignments(df_assignments, current_date):
         base_duration = int(total_time_mins // num_sessions)
         remainder = int(total_time_mins % num_sessions)
         
-        # 1. Detect if it's LATE
         original_due = row["due_dates"].date() if isinstance(row["due_dates"], datetime) else row["due_dates"]
         is_overdue = original_due < current_date
-        
-        # 2. Make it schedulable (clamp to today)
         effective_due = max(original_due, current_date)
+
+        # Smart Class Detection: If 'class_name' is missing/General, try to guess from title
+        c_name = row.get("class_name", "General")
+        a_name = row.get("assignment_name", "Study Task")
+        if c_name == "General":
+             c_name = extract_class_from_title(a_name)
 
         for i in range(num_sessions):
             dur = base_duration + (1 if i < remainder else 0)
-            
             sessions.append({
                 "assignment_id": row.get("assignment_id", f"task_{i}"),
-                "assignment_name": row.get("assignment_name", "Study Task"),
-                "class_name": row.get("class_name", "General"),
+                "assignment_name": a_name,
+                "class_name": c_name,
                 "duration_minutes": dur,
                 "due_date": effective_due, 
                 "full_due_dt": row["due_dates"],
@@ -253,50 +258,48 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "assignment_type": row.get("assignment_type", "")
             })
 
-    # SORTING LOGIC: Future tasks first, then sort by date
     return sorted(sessions, key=lambda x: (x["is_overdue"], x["full_due_dt"]))
 
 # ==========================================================
-# BLOCK 4: SCHEDULING ENGINE (SPACING ENABLED)
+# BLOCK 4: SCHEDULING ENGINE (CLASS-BASED SPACING)
 # ==========================================================
 def schedule_sessions_load_balanced(free_blocks_map, sessions, 
                                     max_hours_per_day, 
                                     break_minutes=15,
                                     daily_usage_tracker=None,
-                                    daily_assignments_tracker=None, # Tracks used topics
-                                    enforce_spacing=False):         # Switch for Spacing
+                                    daily_class_tracker=None,  # NEW: Tracks Classes (e.g. "Math", "Commerce")
+                                    enforce_spacing=False):
     scheduled = []
     unscheduled = []
     
-    if daily_usage_tracker is None:
-        daily_usage_minutes = defaultdict(float)
-    else:
-        daily_usage_minutes = daily_usage_tracker
+    if daily_usage_tracker is None: daily_usage_minutes = defaultdict(float)
+    else: daily_usage_minutes = daily_usage_tracker
 
-    if daily_assignments_tracker is None:
-        daily_assignments_tracker = defaultdict(set)
+    if daily_class_tracker is None: daily_class_tracker = defaultdict(set)
 
     max_minutes = max_hours_per_day * 60
     break_duration = timedelta(minutes=break_minutes) 
-
     sorted_dates = sorted(free_blocks_map.keys())
 
     for session in sessions:
         placed = False
         duration_mins = session["duration_minutes"]
         duration = timedelta(minutes=duration_mins)
-        assign_name = session["assignment_name"]
+        
+        # KEY CHANGE: We check Class Name, not just Assignment Name
+        s_class = session["class_name"] 
 
         for d in sorted_dates:
             if d > session["due_date"]: break
             
-            # 1. CHECK HOURS (The Water Feature: Stop if bucket is full)
+            # 1. CHECK HOURS
             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
 
-            # 2. CHECK SPACING (Anti-Stacking)
-            # Only skip if we are enforcing spacing AND we already did this topic today
-            if enforce_spacing and assign_name in daily_assignments_tracker[d]:
-                continue
+            # 2. CHECK SPACING (Subject-Based)
+            # If we already did a task for this CLASS today, skip to next day.
+            if enforce_spacing:
+                if s_class in daily_class_tracker[d] and s_class != "General":
+                    continue
 
             day_blocks = free_blocks_map[d]
             for i, (start, end) in enumerate(day_blocks):
@@ -312,9 +315,8 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
                     rec["date"] = d
                     scheduled.append(rec)
                     
-                    # Update Trackers
                     daily_usage_minutes[d] += duration_mins
-                    daily_assignments_tracker[d].add(assign_name) # Mark topic as done for today
+                    daily_class_tracker[d].add(s_class) # Lock this class for the day
                     
                     new_start = session_end + break_duration 
                     if new_start < end:
@@ -336,7 +338,6 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
 # ==========================================================
 def merge_contiguous_sessions(scheduled_sessions):
     if not scheduled_sessions: return []
-
     sorted_sessions = sorted(scheduled_sessions, key=lambda x: x["start"])
     merged = []
     current_block = sorted_sessions[0]
@@ -344,9 +345,8 @@ def merge_contiguous_sessions(scheduled_sessions):
     for next_block in sorted_sessions[1:]:
         same_assignment = (current_block["assignment_name"] == next_block["assignment_name"])
         touching_time = (current_block["end"] == next_block["start"])
-        same_day = (current_block["start"].date() == next_block["start"].date())
-
-        if same_assignment and same_day and touching_time:
+        # We only merge identical tasks (splitting a long task), not different tasks from same class
+        if same_assignment and touching_time:
             current_block["end"] = next_block["end"]
             current_block["duration_minutes"] += next_block["duration_minutes"]
         else:
@@ -357,7 +357,7 @@ def merge_contiguous_sessions(scheduled_sessions):
     return merged
 
 # ==========================================================
-# BLOCK 5: OUTPUT GENERATOR
+# BLOCK 5: OUTPUT & MAIN
 # ==========================================================
 def create_output_ics(scheduled_tasks, output_path):
     cal = Calendar()
@@ -372,24 +372,17 @@ def create_output_ics(scheduled_tasks, output_path):
         if isinstance(start, str): start = datetime.fromisoformat(start)
         if isinstance(end, str): end = datetime.fromisoformat(end)
 
-        if task.get('is_exam', False):
-             event.add('summary', f"EXAM: {task['assignment_name']}")
-        else:
-             event.add('summary', f"Do: {task['assignment_name']}")
-             
+        summary_prefix = "EXAM: " if task.get('is_exam') else "Do: "
+        event.add('summary', f"{summary_prefix}{task['assignment_name']}")
         event.add('dtstart', start)
         event.add('dtend', end)
-        event.add('description', f"Course: {task.get('class_name','')}\nType: {task.get('assignment_type','')}")
+        event.add('description', f"Class: {task.get('class_name','')}\nType: {task.get('assignment_type','')}")
         cal.add_component(event)
 
     with open(output_path, 'wb') as f:
         f.write(cal.to_ical())
-    
     return output_path
 
-# ==========================================================
-# MAIN PROCESSOR
-# ==========================================================
 def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
 
@@ -415,7 +408,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
             end_time = start_time + timedelta(hours=dur)
             fixed_tasks.append({
                 "assignment_name": row.get("assignment_name"),
-                "class_name": row.get("class_name"),
+                "class_name": row.get("class_name", "General"),
                 "assignment_type": row.get("assignment_type"),
                 "start": start_time,
                 "end": end_time,
@@ -428,7 +421,6 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
         ics_df = parse_ics_bytes(f_bytes, local_tz, horizon_start, horizon_end)
         for _, r in ics_df.iterrows():
             busy_blocks.append((r['start'], r['end']))
-            
     for t in fixed_tasks:
         busy_blocks.append((t['start'], t['end']))
 
@@ -439,44 +431,41 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     floating_sessions = generate_sessions_from_assignments(floating_df, today_dt.date())
 
     # =========================================================================
-    # THE "TWO-PASS" LOGIC (With Spacing + Failsafe)
+    # TWO-PASS LOGIC (Class-Based Spacing)
     # =========================================================================
     daily_usage_tracker = defaultdict(float)
-    daily_assignments_tracker = defaultdict(set) # Keeps track of what topic is on what day
+    daily_class_tracker = defaultdict(set) # Tracks Classes per day
 
-    # PHASE 1: Healthy Mode (Limit 8 hours) + SPACING ON
-    # This tries to put Session 1 on Mon and Session 2 on Tue.
+    # PHASE 1: Healthy (8h) + Enforce Class Spacing
+    # "If I did Commerce today, don't do another Commerce task today."
     scheduled_p1, unscheduled_p1 = schedule_sessions_load_balanced(
         free_blocks, 
         floating_sessions, 
         max_hours_per_day=8,      
         break_minutes=15,
         daily_usage_tracker=daily_usage_tracker,
-        daily_assignments_tracker=daily_assignments_tracker,
-        enforce_spacing=True # <--- Spacing ON (Anti-Stacking)
+        daily_class_tracker=daily_class_tracker,
+        enforce_spacing=True 
     )
 
-    # PHASE 2: True Failsafe (Crunch Mode) + SPACING OFF
-    # If the deadline is tomorrow, Spacing Check is IGNORED to ensure completion.
+    # PHASE 2: Failsafe (Crunch)
+    # If the deadline is TOMORROW, we IGNORE the spacing rule and stack them.
     if unscheduled_p1:
-        print(f"⚠️ FAILSAFE ACTIVATED: {len(unscheduled_p1)} tasks pushed to overdrive.")
+        print(f"⚠️ FAILSAFE: {len(unscheduled_p1)} tasks must be stacked.")
         scheduled_p2, unscheduled_final = schedule_sessions_load_balanced(
             free_blocks,            
             unscheduled_p1,         
-            max_hours_per_day=24,   # Unlimited Crunch
+            max_hours_per_day=24,
             break_minutes=15,
             daily_usage_tracker=daily_usage_tracker,
-            daily_assignments_tracker=daily_assignments_tracker,
-            enforce_spacing=False # <--- Spacing OFF (Stacking allowed)
+            daily_class_tracker=daily_class_tracker,
+            enforce_spacing=False # Turn off spacing to meet deadline
         )
     else:
         scheduled_p2 = []
         unscheduled_final = []
 
-    all_floating_scheduled = scheduled_p1 + scheduled_p2
-    # =========================================================================
-
-    all_scheduled = fixed_tasks + all_floating_scheduled
+    all_scheduled = fixed_tasks + scheduled_p1 + scheduled_p2
     final_optimized = merge_contiguous_sessions(all_scheduled)
     
     timestamp = int(datetime.now().timestamp())
