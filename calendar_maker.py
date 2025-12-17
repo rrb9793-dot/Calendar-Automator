@@ -10,9 +10,12 @@ import recurring_ical_events
 from collections import defaultdict
 
 # ==========================================================
-# 🔧 DEMO SWITCH (TIME TRAVEL)
+# 🔧 SETTINGS & SWITCHES
 # ==========================================================
-# Set this to a date string (e.g., "2025-09-01") to pretend it is that day.
+
+# 1. DEMO MODE (Time Travel)
+# Set to "2025-09-01" to simulate the start of the semester.
+# Set to None to use the real current date.
 DEMO_START_DATE = "2025-09-01" 
 # DEMO_START_DATE = None 
 
@@ -73,10 +76,12 @@ def parse_request_inputs(json_data):
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
         # Clean Numbers
+        # NOTE: We do NOT fillna(2.0) here anymore. We handle defaults dynamically 
+        # so that exams can have different defaults (1.25h) than tasks (2.0h).
         if "time_spent_hours" in df_assignments.columns:
-            df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"], errors='coerce').fillna(2.0)
+            df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"], errors='coerce')
         else:
-            df_assignments["time_spent_hours"] = 2.0 
+            df_assignments["time_spent_hours"] = None 
 
         if "sessions_needed" not in df_assignments.columns:
             df_assignments["sessions_needed"] = 1
@@ -232,13 +237,19 @@ def extract_class_from_title(title):
 def generate_sessions_from_assignments(df_assignments, current_date):
     """
     Handles assignments.
-    Calculates an 'earliest_start_date' so we don't start Dec assignments in Sept.
     """
     sessions = []
     if df_assignments.empty: return sessions
 
     for _, row in df_assignments.iterrows():
-        total_hours = row.get("time_spent_hours", 2.0)
+        # --- FLOATING TASK DEFAULTS ---
+        # If time is missing for a normal assignment, default to 2.0 hours
+        raw_hours = row.get("time_spent_hours")
+        if pd.isna(raw_hours):
+            total_hours = 2.0
+        else:
+            total_hours = float(raw_hours)
+
         total_time_mins = total_hours * 60
         explicit_sessions = row.get("sessions_needed", 1)
         num_sessions = max(1, int(explicit_sessions))
@@ -249,9 +260,6 @@ def generate_sessions_from_assignments(df_assignments, current_date):
         original_due = row["due_dates"].date() if isinstance(row["due_dates"], datetime) else row["due_dates"]
         
         # --- DEFERRAL LOGIC (Work Backwards) ---
-        # 1-2 Sessions: Start 7 days before
-        # 3-4 Sessions: Start 14 days before
-        # 5+  Sessions: Start 30 days before
         if num_sessions <= 2:
             start_window_days = 7   
         elif num_sessions <= 4:
@@ -266,7 +274,7 @@ def generate_sessions_from_assignments(df_assignments, current_date):
         
         if is_overdue:
             effective_due = current_date + timedelta(days=7)
-            earliest_allowed_start = current_date # Start immediately if overdue
+            earliest_allowed_start = current_date 
         else:
             effective_due = max(original_due, current_date)
 
@@ -284,7 +292,7 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "duration_minutes": dur,
                 "due_date": effective_due, 
                 "full_due_dt": row["due_dates"], 
-                "earliest_start": earliest_allowed_start, # Pass this constraint to the engine
+                "earliest_start": earliest_allowed_start, 
                 "is_overdue": is_overdue, 
                 "field_of_study": row.get("field_of_study", ""),
                 "assignment_type": row.get("assignment_type", "")
@@ -323,10 +331,10 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
         for d in sorted_dates:
             if d > session["due_date"]: break
             
-            # --- NEW CHECK: IS IT TOO EARLY? ---
+            # --- CHECK: IS IT TOO EARLY? ---
             if earliest_start and d < earliest_start:
-                continue # Skip this day, it's too early for this task
-            # -----------------------------------
+                continue 
+            # -------------------------------
             
             # 1. CHECK HOURS
             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
@@ -441,7 +449,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
 
     # ==========================================
-    # ⏳ TIME TRAVEL LOGIC (RESTORED)
+    # ⏳ TIME TRAVEL LOGIC
     # ==========================================
     if DEMO_START_DATE:
         print(f"🔮 DEMO MODE: Time traveling to {DEMO_START_DATE}")
@@ -469,7 +477,15 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
         
         for _, row in fixed_df.iterrows():
             start_time = row["due_dates"]
-            dur = row.get("time_spent_hours", 1.25)
+            
+            # --- FIXED EXAM DEFAULTS ---
+            # If time is missing for an EXAM, default to 1.25 hours (75 min)
+            raw_hours = row.get("time_spent_hours")
+            if pd.isna(raw_hours):
+                dur = 1.25
+            else:
+                dur = float(raw_hours)
+            
             end_time = start_time + timedelta(hours=dur)
             fixed_tasks.append({
                 "assignment_name": row.get("assignment_name"),
@@ -478,7 +494,9 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
                 "start": start_time,
                 "end": end_time,
                 "duration_minutes": dur * 60,
-                "is_exam": True
+                "is_exam": True,
+                # Add this so exams show the time in the description
+                "full_due_dt": start_time 
             })
 
     busy_blocks = []
@@ -502,7 +520,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     daily_usage_tracker = defaultdict(float)
     daily_class_tracker = defaultdict(set)
 
-    # PHASE 1: Healthy (8h) + Enforce Class Spacing + Deferral (don't start too early)
+    # PHASE 1: Healthy (8h) + Enforce Class Spacing + Deferral
     scheduled_p1, unscheduled_p1 = schedule_sessions_load_balanced(
         free_blocks, 
         floating_sessions, 
