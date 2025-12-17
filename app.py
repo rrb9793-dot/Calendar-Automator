@@ -42,23 +42,19 @@ def home():
 def download_file(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
 
-# --- USER PREFERENCES ROUTE ---
 @app.route('/api/get-user-preferences', methods=['GET'])
 def get_user_preferences_route():
     email = request.args.get('email')
-    if not email:
-        return jsonify({}), 400
+    if not email: return jsonify({}), 400
     data = db.get_user_preferences(email)
     return jsonify(data) if data else (jsonify({}), 404)
 
-# --- GENERATE SCHEDULE ROUTE ---
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
         # 1. GATHER INPUTS
         data_str = request.form.get('data')
         req_data = json.loads(data_str) if data_str else {}
-        
         frontend_prefs = req_data.get('preferences', {})
         survey_data = req_data.get('survey', {})
         manual_courses = req_data.get('courses', [])
@@ -101,11 +97,9 @@ def generate_schedule():
             for i in range(pdf_count):
                 pdf = request.files.get(f'pdf_{i}')
                 if not pdf or pdf.filename == '': continue
-                
                 filename = secure_filename(pdf.filename)
                 path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 pdf.save(path)
-                
                 try:
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                     print(f"\n--- 📄 PARSER RESULT FOR: {filename} ---", flush=True)
@@ -113,12 +107,11 @@ def generate_schedule():
                         print(df.to_string(), flush=True) 
                         pdf_dfs.append(df)
                     else:
-                        print("❌ Parser returned EMPTY or NONE.", flush=True)
+                        print("❌ Parser returned EMPTY.", flush=True)
                 except ResourceExhausted:
-                    print("❌ Google AI Quota Exceeded.", flush=True)
                     return jsonify({'error': 'Google AI Quota Exceeded.'}), 429
                 except Exception as e:
-                    print(f"❌ Error processing {filename}: {e}", flush=True)
+                    print(f"❌ Error {filename}: {e}", flush=True)
                     continue
             
             if pdf_dfs:
@@ -146,24 +139,26 @@ def generate_schedule():
                 if survey_data.get('email'):
                     db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
-            # --- BRANCH 2: PDF (Uses Assumptions) ---
+            # --- BRANCH 2: PDF (Uses AI & Assumptions) ---
             else:
                 is_exam = (category == "Exam")
                 
+                # A. Session Logic
                 if is_exam:
                     sessions_needed = 1
-                    predicted_hours = 1.25 # Fixed Exam duration (75m)
+                    predicted_hours = 1.25 # Fixed Exam duration
                     is_fixed_event = True  # Blocks calendar
                 else:
                     sessions_needed = 2 if category in HARD_TASKS else 1
                     is_fixed_event = False
                     
-                    # Force Default Assumptions
+                    # B. Context Assumptions (PDF Default: No group, No in-person, Home, Google)
                     assignment_details = {
                         "assignment_name": item.get("Assignment", "Untitled"),
                         "work_sessions": sessions_needed,
                         "assignment_type": category, 
-                        "field_of_study": survey_data.get('major', 'Business'),
+                        # Use AI-detected Field, fallback to Survey Major
+                        "field_of_study": item.get("Field", survey_data.get('major', 'Business')),
                         "external_resources": 'Google/internet', 
                         "work_location": 'At home/private setting', 
                         "work_in_group": 'No', 
@@ -173,7 +168,6 @@ def generate_schedule():
 
             # Formatting
             date_str = item.get("Date")
-            # If Exam, parser likely found time. If manual, default to 23:59.
             time_str = item.get("Time") if item.get("Time") else "23:59"
             full_due_string = f"{date_str} {time_str}"
             
