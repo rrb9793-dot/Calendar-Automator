@@ -32,6 +32,13 @@ body {
     display: flex; justify-content: space-between; align-items: flex-end;
     margin-bottom: 40px; border-bottom: 3px solid var(--retro-ink); padding-bottom: 10px;
 }
+
+/* --- UPDATED: Text Position --- */
+.header-text {
+    /* Nudges the text down closer to the bottom line */
+    margin-bottom: -10px; 
+}
+
 .header-text h1 { font-family: var(--font-header); font-size: 2.5rem; margin: 0; letter-spacing: -1px; }
 
 /* Slogan Styling */
@@ -43,14 +50,12 @@ body {
     font-weight: 400;
 }
 
-/* Updated Logo Style (Darken Blend) */
+/* --- UPDATED: Logo Size --- */
 .header-logo {
-    height: 80px; 
+    height: 120px; /* Increased from 80px */
     width: auto;
     object-fit: contain;
     border-radius: 15px; 
-    /* 'darken' often blends better than 'multiply' for light backgrounds 
-       as it doesn't add shadow, it just replaces white with the bg color */
     mix-blend-mode: darken; 
 }
 
