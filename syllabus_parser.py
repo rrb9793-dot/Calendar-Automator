@@ -43,7 +43,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         while f.state.name == "PROCESSING": time.sleep(1); f = genai.get_file(f.name)
         
         prompt = """Extract metadata and assignments from this syllabus into JSON.
-        
         Output format:
         {
             "metadata": {
@@ -60,11 +59,11 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
                 }
             ]
         }
-        
         Rules:
         1. "field_of_study" MUST be one of: "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", "Social Sciences", "Arts & Humanities", "Health & Education".
         2. "category" MUST be one of: "Exam", "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study".
         3. Dates YYYY-MM-DD. Times 24h.
+        4. IGNORE holidays, breaks, or "No Class" entries.
         """
         
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -80,7 +79,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         if isinstance(data, list): data = {"assignments": data, "metadata": {}}
         
         meta = data.get("metadata", {})
-        # Use empty string if unknown so we can detect it later
         course = meta.get("course_name", "") 
         field = meta.get("field_of_study", "Business")
         
@@ -97,31 +95,61 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
 
         rows = []
         for i in data.get("assignments", []):
+            # 1. IMMEDIATE FILTER: Skip blank names
+            name = i.get("assignment_name", "").strip()
+            if not name or name.lower() in ["untitled", "no class", "no class."]:
+                continue
+                
             rows.append({
                 "Course": course, 
                 "Field": field,
                 "Date": i.get("date"), 
                 "Time": i.get("time"),
                 "Category": i.get("category", "p_set"), 
-                "Assignment": i.get("assignment_name", "Untitled")
+                "Assignment": name
             })
             
         df = pd.DataFrame(rows)
         if df.empty: return df
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
+        
+        # --- 2. SEQUENTIAL RENAMING (The Fix) ---
+        # Sort by date so "Assignment 1" is actually the first one
+        df = df.sort_values(by='Date')
+        
+        # Identify duplicates
+        # We group by the 'Assignment' name. If a name appears >1 time, we number them.
+        name_counts = df['Assignment'].value_counts()
+        duplicates = name_counts[name_counts > 1].index
+        
+        # Create a tracker for names we've seen
+        seen_counts = {}
+        
+        def rename_duplicates(row):
+            name = row['Assignment']
+            if name in duplicates:
+                if name not in seen_counts:
+                    seen_counts[name] = 1
+                else:
+                    seen_counts[name] += 1
+                return f"{name} {seen_counts[name]}"
+            return name
+
+        df['Assignment'] = df.apply(rename_duplicates, axis=1)
+
+        # Standardize Date String
+        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
         df['Time'] = df.apply(lambda r: resolve_time(r, sched_map), axis=1)
         
-        # --- SMART NAME FORMATTING ---
-        # Prevents "Assignment Name ()"
-        def format_name(row):
+        # Append Course Name (Only if it exists)
+        def format_final_name(row):
             name = row['Assignment']
-            course = row['Course']
-            if course and course.strip():
-                return f"{name} ({course})"
+            c = row['Course']
+            if c and c.strip(): return f"{name} ({c})"
             return name
             
-        df['Assignment'] = df.apply(format_name, axis=1)
+        df['Assignment'] = df.apply(format_final_name, axis=1)
         
         return df
 
@@ -131,6 +159,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
 
 def consolidate_assignments(df):
     if df.empty: return df
+    # Since we made names unique (seq numbering), we group by the FULL name now
     return df.groupby(['Course', 'Field', 'Date', 'Time', 'Category']).agg({
         'Assignment': lambda x: " / ".join(sorted(set(str(s) for s in x if s)))
     }).reset_index().sort_values(by=['Date', 'Time'])
