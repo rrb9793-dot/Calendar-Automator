@@ -36,7 +36,7 @@ def standardize_time(time_str):
     return None 
 
 def resolve_time(row, schedule_map):
-    """Determines the best time for an assignment."""
+    """Determines the best time for an assignment based on class schedule."""
     existing_time = row.get('Time')
     
     if existing_time and any(char.isdigit() for char in str(existing_time)):
@@ -55,16 +55,19 @@ def resolve_time(row, schedule_map):
     return "23:59"
 
 # --- PARSING ENGINE ---
-def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_name: str = None):
+def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
+    print(f"--- 🚀 STARTED PARSING: {os.path.basename(pdf_path)} ---", flush=True)
+
     active_key = api_key if api_key else DEFAULT_API_KEY
     if not active_key:
-        print("❌ Error: No GEMINI_API_KEY found.")
+        print("❌ Error: No GEMINI_API_KEY found.", flush=True)
         return None
 
     genai.configure(api_key=active_key)
-    print(f"📄 Parsing: {os.path.basename(pdf_path)}")
 
     try:
+        # 1. UPLOAD
+        print("... Uploading file to Gemini...", flush=True)
         sample_file = genai.upload_file(path=pdf_path, display_name="Syllabus")
         
         while sample_file.state.name == "PROCESSING":
@@ -72,16 +75,19 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
             sample_file = genai.get_file(sample_file.name)
             
         if sample_file.state.name != "ACTIVE":
-            print(f"❌ File processing failed: {sample_file.state.name}")
+            print(f"❌ File processing failed: {sample_file.state.name}", flush=True)
             return None
+        
+        print("... File Active. Sending Prompt...", flush=True)
 
+        # 2. PROMPT
         prompt = """
         Extract all assignments, exams, and due dates from this syllabus into JSON.
         
         Output format:
         {
             "metadata": {
-                "course_name": "string",
+                "course_name": "string (The official name of the course found in the header)",
                 "class_meetings": [ {"days": ["Monday"], "start_time": "14:00"} ]
             },
             "assignments": [
@@ -89,7 +95,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
                     "date": "YYYY-MM-DD",
                     "time": "HH:MM", 
                     "assignment_name": "string",
-                    "category": "Exam/Reading/P-Set/Essay/Project",
+                    "category": "STRICT_CATEGORY_STRING",
                     "description": "string"
                 }
             ]
@@ -98,10 +104,20 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
         Rules:
         1. Dates MUST be YYYY-MM-DD.
         2. Times MUST be 24-hour format (HH:MM) if available. If not, null.
+        3. "category" MUST be one of the following strings EXACTLY:
+           - "Exam" (Midterms, Finals, Quizzes)
+           - "Problem Set"
+           - "Coding Assignment"
+           - "Research Paper"
+           - "Creative Writing/Essay"
+           - "Presentation"
+           - "Modeling"
+           - "Discussion Post"
+           - "Readings"
+           - "Case Study"
         """
 
         model = genai.GenerativeModel('gemini-2.0-flash')
-
         max_retries = 3
         response = None
 
@@ -113,18 +129,20 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
                 )
                 break 
             except ResourceExhausted:
-                print(f"⚠️ Quota hit. Retrying in 5s... ({attempt+1}/{max_retries})")
+                print(f"⚠️ Quota hit. Retrying in 5s... ({attempt+1}/{max_retries})", flush=True)
                 time.sleep(5)
             except Exception as e:
-                print(f"❌ GenAI Error: {e}")
+                print(f"❌ GenAI Error: {e}", flush=True)
                 return None
         
-        if not response: return None
+        if not response: 
+            print("❌ No response received from Gemini.", flush=True)
+            return None
 
         try:
             data = json.loads(response.text)
         except:
-            print("❌ Failed to parse JSON response from Gemini")
+            print("❌ Failed to parse JSON response", flush=True)
             return None
 
         if isinstance(data, list):
@@ -132,16 +150,16 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
         
         meta = data.get("metadata", {})
         
-        ai_extracted_name = meta.get("course_name", "Unknown Course")
-        course_name = manual_course_name if manual_course_name else ai_extracted_name
-        
+        # EXTRACT COURSE NAME FROM AI METADATA
+        course_name = meta.get("course_name", "Unknown Course")
+        print(f"--- METADATA FOUND: Course={course_name} ---", flush=True)
+
         schedule_map = {}
         for meeting in meta.get("class_meetings", []):
             raw_time = meeting.get("start_time", "")
             std_time = standardize_time(raw_time)
             days = meeting.get("days", [])
             if isinstance(days, str): days = [days]
-            
             if std_time:
                 for day in days:
                     for full_day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
@@ -160,15 +178,16 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
             })
             
         df = pd.DataFrame(rows)
-        if df.empty: return df
+        if df.empty: 
+            print("⚠️ Parsed DataFrame is Empty.", flush=True)
+            return df
 
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
         df = df.dropna(subset=['Date'])
         
         df['Time'] = df.apply(lambda row: resolve_time(row, schedule_map), axis=1)
 
-        # --- NEW: Append Course Name to Assignment Name ---
-        # Format: "Assignment Name (Course Name)"
+        # Append Course Name to Assignment
         df['Assignment'] = df.apply(
             lambda row: f"{row['Assignment']} ({row['Course']})", axis=1
         )
@@ -176,7 +195,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None, manual_course_nam
         return df
 
     except Exception as e:
-        print(f"❌ Critical Parsing Error: {e}")
+        print(f"❌ Critical Parsing Error: {e}", flush=True)
         return None
 
 # --- CONSOLIDATION ---
