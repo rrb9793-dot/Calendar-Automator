@@ -51,18 +51,18 @@ def parse_request_inputs(json_data):
         }
         df_assignments.rename(columns=column_map, inplace=True)
         
-        # Format Dates
+        # Format Dates & FIX TIMEZONE CRASH
         if "due_dates" in df_assignments.columns:
             df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed', errors='coerce')
             
-            # --- FIX: FORCE TIMEZONE AWARENESS ---
-            # 1. If date has no timezone (Naive), stamp it with the User's Local TZ
-            # 2. If it already has one, convert it to the User's Local TZ
-            if df_assignments["due_dates"].dt.tz is None:
-                df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_localize(local_tz, ambiguous='NaT', nonexistent='shift_forward')
-            else:
-                df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_convert(local_tz)
-            
+            # Force Timezone Awareness to match local_tz
+            if not df_assignments.empty:
+                # If naive (no timezone), localize it. If aware, convert it.
+                if df_assignments["due_dates"].dt.tz is None:
+                    df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_localize(local_tz, ambiguous='NaT', nonexistent='shift_forward')
+                else:
+                    df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_convert(local_tz)
+
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
         if "time_spent_hours" in df_assignments.columns:
@@ -75,7 +75,7 @@ def parse_request_inputs(json_data):
         else:
             df_assignments["sessions_needed"] = pd.to_numeric(df_assignments["sessions_needed"], errors='coerce').fillna(1).astype(int)
 
-        # Ensure fixed event flag exists for Exams
+        # Ensure fixed event flag exists
         if "is_fixed_event" not in df_assignments.columns:
             df_assignments["is_fixed_event"] = False
 
@@ -322,6 +322,7 @@ def create_output_ics(scheduled_tasks, output_path):
         start = task['start']
         end = task['end']
         
+        # Ensure datetimes
         if isinstance(start, str): start = datetime.fromisoformat(start)
         if isinstance(end, str): end = datetime.fromisoformat(end)
 
@@ -346,7 +347,7 @@ def create_output_ics(scheduled_tasks, output_path):
 # MAIN PROCESSOR (The Orchestrator)
 # ==========================================================
 def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
-    # 1. Parse Inputs
+    # 1. Parse Inputs (and fix timezones)
     local_tz, work_windows, df_assignments = parse_request_inputs(json_data)
 
     # 2. Determine Horizon
@@ -358,20 +359,20 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
         max_due = df_assignments["due_dates"].max()
         horizon_end = max(horizon_end, max_due + timedelta(days=7))
 
-    # 3. Handle Fixed Events (Exams) vs Floating Tasks
+    # 3. SPLIT TASKS: FIXED (Exams) vs FLOATING (Homework)
     fixed_tasks = []
     floating_df = pd.DataFrame()
     
     if not df_assignments.empty:
-        # Split Dataframe
+        # Filter for fixed events
         fixed_mask = df_assignments["is_fixed_event"] == True
         fixed_df = df_assignments[fixed_mask]
         floating_df = df_assignments[~fixed_mask]
         
-        # Process Fixed Events
+        # Process Fixed Events (Exams) - Convert them to concrete blocks
         for _, row in fixed_df.iterrows():
             start_time = row["due_dates"]
-            # Default to 1.25 hours for Exams
+            # Exams use their specific duration (default 1.25h)
             dur = row.get("time_spent_hours", 1.25)
             end_time = start_time + timedelta(hours=dur)
             
@@ -384,16 +385,17 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
                 "is_exam": True # Flag for ICS generator
             })
 
-    # 4. Calculate Busy Times (ICS Files + Fixed Exams)
+    # 4. BUSY TIME CALCULATION
     busy_blocks = []
     
-    # A. User ICS Files
+    # A. User ICS Files (Classes/Sports)
     for f_bytes in uploaded_files_bytes:
         ics_df = parse_ics_bytes(f_bytes, local_tz, horizon_start, horizon_end)
         for _, r in ics_df.iterrows():
             busy_blocks.append((r['start'], r['end']))
             
-    # B. Add Fixed Exams to Busy Blocks (So we don't schedule study time over exams)
+    # B. ADD EXAMS TO BUSY BLOCKS
+    # This ensures we don't schedule homework *during* the exam
     for t in fixed_tasks:
         busy_blocks.append((t['start'], t['end']))
 
@@ -401,10 +403,10 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     merged_busy = merge_busy_blocks(busy_blocks, join_touching=True)
     buffered_busy = add_buffer_to_busy_timeline(merged_busy, buffer_minutes=15)
 
-    # 5. Calculate Free Blocks
+    # 5. Calculate Free Blocks (Subtract Busy from Work Windows)
     free_blocks = build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz)
 
-    # 6. Generate Sessions for Floating Tasks
+    # 6. Generate Sessions ONLY for Floating Tasks
     floating_sessions = generate_sessions_from_assignments(floating_df)
 
     # 7. Schedule Floating Tasks (Tetris Time)
@@ -416,7 +418,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
         max_sessions_per_day=4
     )
 
-    # 8. Combine All Tasks
+    # 8. Combine Fixed + Floating for Final Output
     all_scheduled = fixed_tasks + scheduled_floating
     
     # 9. Generate ICS
