@@ -223,9 +223,8 @@ def extract_class_from_title(title):
 def generate_sessions_from_assignments(df_assignments, current_date):
     """
     Handles assignments. 
-    CRITICAL CHANGE: If an assignment is OVERDUE, it gives it a 
-    fake deadline of 'Today + 7 Days'. This prevents panic-stacking
-    and allows the spacer to work.
+    If an assignment is OVERDUE, it gives it a fake deadline of 
+    'Today + 7 Days' to allow the spacer to work.
     """
     sessions = []
     if df_assignments.empty: return sessions
@@ -244,7 +243,6 @@ def generate_sessions_from_assignments(df_assignments, current_date):
         
         # --- CATCH-UP LOGIC ---
         if is_overdue:
-            # Pretend it's due in 7 days so we can space it out
             effective_due = current_date + timedelta(days=7)
         else:
             effective_due = max(original_due, current_date)
@@ -262,8 +260,8 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "assignment_name": a_name,
                 "class_name": c_name,
                 "duration_minutes": dur,
-                "due_date": effective_due, # Uses the new Grace Period date
-                "full_due_dt": row["due_dates"],
+                "due_date": effective_due, 
+                "full_due_dt": row["due_dates"], # Keeping the REAL deadline here for display
                 "is_overdue": is_overdue, 
                 "field_of_study": row.get("field_of_study", ""),
                 "assignment_type": row.get("assignment_type", "")
@@ -299,7 +297,6 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
         s_class = session["class_name"] 
 
         for d in sorted_dates:
-            # The 'due_date' here is now the Grace Period date for overdue tasks
             if d > session["due_date"]: break
             
             # 1. CHECK HOURS
@@ -381,11 +378,32 @@ def create_output_ics(scheduled_tasks, output_path):
         if isinstance(start, str): start = datetime.fromisoformat(start)
         if isinstance(end, str): end = datetime.fromisoformat(end)
 
+        # --- DEADLINE FORMATTING ---
+        deadline_dt = task.get('full_due_dt')
+        deadline_str = "Unknown"
+        if deadline_dt:
+             if isinstance(deadline_dt, str):
+                 deadline_str = deadline_dt
+             elif isinstance(deadline_dt, datetime):
+                 deadline_str = deadline_dt.strftime("%Y-%m-%d %H:%M")
+             else:
+                 deadline_str = str(deadline_dt)
+        # ---------------------------
+
         summary_prefix = "EXAM: " if task.get('is_exam') else "Do: "
         event.add('summary', f"{summary_prefix}{task['assignment_name']}")
         event.add('dtstart', start)
         event.add('dtend', end)
-        event.add('description', f"Class: {task.get('class_name','')}\nType: {task.get('assignment_type','')}")
+        
+        # --- ENRICHED DESCRIPTION ---
+        description = (
+            f"Class: {task.get('class_name', 'General')}\n"
+            f"Deadline: {deadline_str}\n"
+            f"Type: {task.get('assignment_type', 'Task')}"
+        )
+        event.add('description', description)
+        # ----------------------------
+
         cal.add_component(event)
 
     with open(output_path, 'wb') as f:
@@ -401,7 +419,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     
     if not df_assignments.empty and "due_dates" in df_assignments:
         max_due = df_assignments["due_dates"].max()
-        horizon_end = max(horizon_end, max_due + timedelta(days=14)) # Extended horizon
+        horizon_end = max(horizon_end, max_due + timedelta(days=14))
 
     fixed_tasks = []
     floating_df = pd.DataFrame()
@@ -440,7 +458,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     floating_sessions = generate_sessions_from_assignments(floating_df, today_dt.date())
 
     # =========================================================================
-    # TWO-PASS LOGIC (Class-Based Spacing + Catch-Up Window)
+    # TWO-PASS LOGIC (Class-Based Spacing + Catch-Up)
     # =========================================================================
     daily_usage_tracker = defaultdict(float)
     daily_class_tracker = defaultdict(set)
