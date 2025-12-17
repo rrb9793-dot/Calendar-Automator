@@ -106,7 +106,7 @@ def generate_schedule():
         pdf_count = int(request.form.get('pdf_count', 0))
         
         if pdf_count > 0:
-            print(f"Processing {pdf_count} PDF(s) with Gemini...")
+            print(f"Processing {pdf_count} PDF(s) with Gemini...", flush=True)
             pdf_dfs = []
             
             for i in range(pdf_count):
@@ -122,21 +122,44 @@ def generate_schedule():
                 try:
                     # Parser will now append (Course Name) automatically
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY, manual_course_name=course_name)
+                    
+                    # =========== LOGGING START (ADDED) ===========
+                    print(f"\n--- 📄 PARSER RESULT FOR: {filename} ---", flush=True)
+                    if df is not None and not df.empty:
+                        # .to_string() forces the logs to show the WHOLE table
+                        print(df.to_string(), flush=True) 
+                    else:
+                        print("❌ Parser returned EMPTY or NONE.", flush=True)
+                    print("------------------------------------------\n", flush=True)
+                    # =========== LOGGING END =====================
+
                     if df is not None and not df.empty:
                         pdf_dfs.append(df)
                     time.sleep(2) 
+                
                 except TypeError as te:
-                    print(f"Warning: syllabus_parser outdated. {te}")
+                    print(f"Warning: syllabus_parser outdated. {te}", flush=True)
+                    # Fallback logic
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
                     if df is not None and not df.empty:
                         df['Course'] = course_name
                         # Fallback append if parser is old
                         df['Assignment'] = df['Assignment'] + f" ({course_name})"
+                        
+                        # Log the fallback result too
+                        print(f"--- (Fallback) PARSER RESULT FOR: {filename} ---", flush=True)
+                        print(df.to_string(), flush=True)
+                        print("------------------------------------------\n", flush=True)
+                        
                         pdf_dfs.append(df)
+
                 except ResourceExhausted:
+                    print("❌ Google AI Quota Exceeded.", flush=True)
                     return jsonify({'error': 'Google AI Quota Exceeded. Please wait.'}), 429
                 except Exception as e:
-                    print(f"❌ Error processing {filename}: {e}")
+                    print(f"❌ Error processing {filename}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
                     continue
             
             if pdf_dfs:
@@ -218,7 +241,7 @@ def generate_schedule():
         })
 
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"API Error: {e}", flush=True)
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
