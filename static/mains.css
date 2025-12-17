@@ -43,14 +43,15 @@ body {
     font-weight: 400;
 }
 
-/* Updated Logo Style (Transparent + Rounded) */
+/* Updated Logo Style (Darken Blend) */
 .header-logo {
     height: 80px; 
     width: auto;
     object-fit: contain;
     border-radius: 15px; 
-    /* This makes the beige/white background of the image transparent */
-    mix-blend-mode: multiply; 
+    /* 'darken' often blends better than 'multiply' for light backgrounds 
+       as it doesn't add shadow, it just replaces white with the bg color */
+    mix-blend-mode: darken; 
 }
 
 /* Cards */
