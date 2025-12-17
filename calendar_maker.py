@@ -9,7 +9,7 @@ import recurring_ical_events
 from collections import defaultdict
 
 # ==========================================================
-# BLOCK 1: INPUT PARSER
+# BLOCK 1 & 2: INPUT PARSER
 # ==========================================================
 def parse_request_inputs(json_data):
     # 1. TIMEZONE & WORK WINDOWS
@@ -76,7 +76,7 @@ def parse_request_inputs(json_data):
     return local_tz, work_windows, df_assignments
 
 # ==========================================================
-# BLOCK 2: ICS PARSING (Busy Times)
+# BLOCK 3: ICS PARSING (Busy Times)
 # ==========================================================
 def _to_local_dt(value, local_tz: ZoneInfo):
     if value is None: return None
@@ -195,7 +195,7 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
     return FREE_BLOCKS
 
 # ==========================================================
-# BLOCK 3: SESSION GENERATOR
+# BLOCK 4: SESSION GENERATOR
 # ==========================================================
 def generate_sessions_from_assignments(df_assignments):
     sessions = []
@@ -232,7 +232,7 @@ def generate_sessions_from_assignments(df_assignments):
     return sorted(sessions, key=lambda x: x["full_due_dt"])
 
 # ==========================================================
-# BLOCK 4: SCHEDULING ENGINE (The "Tetris" Player)
+# BLOCK 5: SCHEDULING ENGINE (The "Tetris" Player)
 # ==========================================================
 def schedule_sessions_load_balanced(free_blocks_map, sessions, 
                                     max_hours_per_day=8, 
@@ -301,7 +301,7 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
     return scheduled, unscheduled
 
 # ==========================================================
-# BLOCK 5: OUTPUT GENERATOR
+# BLOCK 6: OUTPUT GENERATOR
 # ==========================================================
 def create_output_ics(scheduled_tasks, output_path):
     cal = Calendar()
