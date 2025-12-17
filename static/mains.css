@@ -34,10 +34,15 @@ body {
 }
 .header-text h1 { font-family: var(--font-header); font-size: 2.5rem; margin: 0; letter-spacing: -1px; }
 .header-text .subtitle { font-family: var(--font-header); margin: 5px 0 0 0; opacity: 0.7; }
-.retro-star-badge {
-    width: 60px; height: 60px; background: var(--retro-ink); color: var(--retro-bg);
-    border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    font-family: var(--font-header); font-weight: bold; transform: rotate(15deg);
+
+/* --- NEW LOGO STYLE (Option B: Blend Mode) --- */
+.header-logo {
+    height: 80px; 
+    width: auto;
+    /* This makes the beige background of the logo transparent 
+       so the paper texture shows through */
+    mix-blend-mode: multiply; 
+    object-fit: contain;
 }
 
 /* Cards */
@@ -64,7 +69,6 @@ body {
 
 .field label { display: block; font-weight: 700; margin-bottom: 8px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; }
 
-/* UPDATED: Added email and number types */
 select, 
 input[type="text"], 
 input[type="date"], 
