@@ -42,7 +42,6 @@ def home():
 def download_file(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
 
-# --- USER PREFERENCES ROUTE ---
 @app.route('/api/get-user-preferences', methods=['GET'])
 def get_user_preferences_route():
     email = request.args.get('email')
@@ -50,7 +49,6 @@ def get_user_preferences_route():
     data = db.get_user_preferences(email)
     return jsonify(data) if data else (jsonify({}), 404)
 
-# --- GENERATE SCHEDULE ROUTE ---
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
@@ -75,11 +73,16 @@ def generate_schedule():
         # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries (USER OVERRIDES)
+        # A. Manual Entries (Formatting Fix)
         for course in manual_courses:
             assign_name = course.get('assignment_name', 'Untitled')
-            course_field = course.get('field_of_study', 'General')
-            final_name = f"{assign_name} ({course_field})"
+            course_field = course.get('field_of_study', '')
+            
+            # Fix: Only add parens if field exists
+            if course_field and course_field != "N/A":
+                final_name = f"{assign_name} ({course_field})"
+            else:
+                final_name = assign_name
 
             all_assignments.append({
                 "source_type": "manual",
@@ -126,14 +129,14 @@ def generate_schedule():
         # 3. PREDICTION & DB SAVE
         formatted_assignments = []
         
-        # --- NEW SESSION LOGIC ---
+        # Categories
         HEAVY_TASKS = ['Coding Assignment', 'Research Paper']
         MEDIUM_TASKS = ['Problem Set', 'Modeling', 'Case Study', 'Creative Writing/Essay']
         
         for i, item in enumerate(all_assignments):
             category = item.get('Category', 'p_set')
             
-            # --- BRANCH 1: MANUAL (Uses User Input) ---
+            # --- BRANCH 1: MANUAL ---
             if item["source_type"] == "manual":
                 raw = item["raw_details"]
                 assignment_details = raw 
@@ -144,32 +147,29 @@ def generate_schedule():
                 if survey_data.get('email'):
                     db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
-            # --- BRANCH 2: PDF (Uses AI & Assumptions) ---
+            # --- BRANCH 2: PDF ---
             else:
                 is_exam = (category == "Exam")
                 
-                # A. Session Logic
                 if is_exam:
                     sessions_needed = 1
-                    predicted_hours = 1.25 # Fixed Exam duration
-                    is_fixed_event = True  # Blocks calendar
+                    predicted_hours = 1.25 
+                    is_fixed_event = True  
                 elif category in HEAVY_TASKS:
-                    sessions_needed = 3    # <--- UPDATED (Coding, Research Paper)
+                    sessions_needed = 3
                     is_fixed_event = False
                 elif category in MEDIUM_TASKS:
-                    sessions_needed = 2    # <--- UPDATED (Essay, P-Set, etc)
+                    sessions_needed = 2
                     is_fixed_event = False
                 else:
-                    sessions_needed = 1    # Everything else
+                    sessions_needed = 1
                     is_fixed_event = False
                     
-                # B. Context Assumptions
                 if not is_exam:
                     assignment_details = {
                         "assignment_name": item.get("Assignment", "Untitled"),
                         "work_sessions": sessions_needed,
                         "assignment_type": category, 
-                        # Use AI-detected Field, fallback to Survey Major
                         "field_of_study": item.get("Field", survey_data.get('major', 'Business')),
                         "external_resources": 'Google/internet', 
                         "work_location": 'At home/private setting', 
@@ -177,7 +177,15 @@ def generate_schedule():
                         "submitted_in_person": 'No'
                     }
                     predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
+                else:
+                    # Fake details for logging Exam inputs
+                    assignment_details = {"name": "Exam (Fixed)", "duration": "1.25h", "sessions": 1}
 
+            # --- LOGGING REQUESTED ---
+            print(f"\n📊 INPUTS FOR '{item.get('Assignment')}':", flush=True)
+            print(json.dumps(assignment_details, indent=2), flush=True)
+            print(f"   -> Predicted: {predicted_hours}h | Sessions: {sessions_needed}", flush=True)
+            
             # Formatting
             date_str = item.get("Date")
             time_str = item.get("Time") if item.get("Time") else "23:59"
