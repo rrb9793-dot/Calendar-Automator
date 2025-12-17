@@ -77,7 +77,7 @@ def generate_schedule():
         # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries
+        # A. Manual Entries (USER OVERRIDES)
         for course in manual_courses:
             assign_name = course.get('assignment_name', 'Untitled')
             course_field = course.get('field_of_study', 'General')
@@ -135,7 +135,7 @@ def generate_schedule():
         for i, item in enumerate(all_assignments):
             category = item.get('Category', 'p_set')
             
-            # --- BRANCH 1: MANUAL (Overrides) ---
+            # --- BRANCH 1: MANUAL (Uses User Input) ---
             if item["source_type"] == "manual":
                 raw = item["raw_details"]
                 assignment_details = raw 
@@ -146,18 +146,19 @@ def generate_schedule():
                 if survey_data.get('email'):
                     db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
-            # --- BRANCH 2: PDF (Defaults) ---
+            # --- BRANCH 2: PDF (Uses Assumptions) ---
             else:
                 is_exam = (category == "Exam")
                 
                 if is_exam:
                     sessions_needed = 1
-                    predicted_hours = 1.25 # Fixed Exam duration
+                    predicted_hours = 1.25 # Fixed Exam duration (75m)
                     is_fixed_event = True  # Blocks calendar
                 else:
                     sessions_needed = 2 if category in HARD_TASKS else 1
                     is_fixed_event = False
                     
+                    # Force Default Assumptions
                     assignment_details = {
                         "assignment_name": item.get("Assignment", "Untitled"),
                         "work_sessions": sessions_needed,
@@ -172,6 +173,7 @@ def generate_schedule():
 
             # Formatting
             date_str = item.get("Date")
+            # If Exam, parser likely found time. If manual, default to 23:59.
             time_str = item.get("Time") if item.get("Time") else "23:59"
             full_due_string = f"{date_str} {time_str}"
             
