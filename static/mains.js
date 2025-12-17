@@ -53,6 +53,7 @@ function addAssignmentRow() {
     document.getElementById('assignmentsContainer').appendChild(d);
 }
 
+// REMOVED TEXT INPUT FOR COURSE NAME
 function addPdfRow() {
     const d = document.createElement('div'); d.className = 'syllabus-row'; d.style.gridTemplateColumns = "1fr 50px";
     d.innerHTML = `<div><label style="font-size:0.7rem">Syllabus PDF</label><input type="file" class="pdf-file" accept=".pdf"></div>
@@ -109,7 +110,6 @@ if(em) {
                 const d = await r.json();
                 document.getElementById('studentYear').value = d.year;
                 document.getElementById('timezone').value = d.timezone;
-                // Simplified set logic
             }
         } catch(e) { console.error(e); }
         finally { em.style.opacity = "1"; }
