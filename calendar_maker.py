@@ -248,7 +248,7 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "duration_minutes": dur,
                 "due_date": effective_due, 
                 "full_due_dt": row["due_dates"],
-                "is_overdue": is_overdue, # Priority Flag
+                "is_overdue": is_overdue, 
                 "field_of_study": row.get("field_of_study", ""),
                 "assignment_type": row.get("assignment_type", "")
             })
@@ -257,14 +257,14 @@ def generate_sessions_from_assignments(df_assignments, current_date):
     return sorted(sessions, key=lambda x: (x["is_overdue"], x["full_due_dt"]))
 
 # ==========================================================
-# BLOCK 4: SCHEDULING ENGINE (SPACING + FAILSAFE)
+# BLOCK 4: SCHEDULING ENGINE (SPACING ENABLED)
 # ==========================================================
 def schedule_sessions_load_balanced(free_blocks_map, sessions, 
                                     max_hours_per_day, 
                                     break_minutes=15,
                                     daily_usage_tracker=None,
-                                    daily_assignments_tracker=None, # NEW: Tracks what topics are on what day
-                                    enforce_spacing=False):         # NEW: Switch to turn spacing ON/OFF
+                                    daily_assignments_tracker=None, # Tracks used topics
+                                    enforce_spacing=False):         # Switch for Spacing
     scheduled = []
     unscheduled = []
     
@@ -290,11 +290,11 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
         for d in sorted_dates:
             if d > session["due_date"]: break
             
-            # 1. CHECK HOURS (Water Logic)
+            # 1. CHECK HOURS (The Water Feature: Stop if bucket is full)
             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
 
-            # 2. CHECK SPACING (Anti-Stacking Logic)
-            # If we enforce spacing AND this assignment is already on this day, skip this day.
+            # 2. CHECK SPACING (Anti-Stacking)
+            # Only skip if we are enforcing spacing AND we already did this topic today
             if enforce_spacing and assign_name in daily_assignments_tracker[d]:
                 continue
 
@@ -314,7 +314,7 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
                     
                     # Update Trackers
                     daily_usage_minutes[d] += duration_mins
-                    daily_assignments_tracker[d].add(assign_name) # Mark this topic as "done for today"
+                    daily_assignments_tracker[d].add(assign_name) # Mark topic as done for today
                     
                     new_start = session_end + break_duration 
                     if new_start < end:
@@ -453,7 +453,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
         break_minutes=15,
         daily_usage_tracker=daily_usage_tracker,
         daily_assignments_tracker=daily_assignments_tracker,
-        enforce_spacing=True # <--- Soft Constraint: ON
+        enforce_spacing=True # <--- Spacing ON (Anti-Stacking)
     )
 
     # PHASE 2: True Failsafe (Crunch Mode) + SPACING OFF
@@ -467,7 +467,7 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
             break_minutes=15,
             daily_usage_tracker=daily_usage_tracker,
             daily_assignments_tracker=daily_assignments_tracker,
-            enforce_spacing=False # <--- Soft Constraint: OFF (Just get it done!)
+            enforce_spacing=False # <--- Spacing OFF (Stacking allowed)
         )
     else:
         scheduled_p2 = []
