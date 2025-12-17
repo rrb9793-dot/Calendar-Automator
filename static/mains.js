@@ -53,7 +53,6 @@ function addAssignmentRow() {
     document.getElementById('assignmentsContainer').appendChild(d);
 }
 
-// REMOVED TEXT INPUT FOR COURSE NAME
 function addPdfRow() {
     const d = document.createElement('div'); d.className = 'syllabus-row'; d.style.gridTemplateColumns = "1fr 50px";
     d.innerHTML = `<div><label style="font-size:0.7rem">Syllabus PDF</label><input type="file" class="pdf-file" accept=".pdf"></div>
@@ -90,7 +89,24 @@ async function handleSubmit() {
             btn.textContent = "DONE";
             const resArea = document.getElementById('resultArea'); resArea.style.display = 'block';
             let html = '<div class="prediction-header"><h5>Workload</h5></div>';
-            data.assignments.forEach(t => html += `<div class="prediction-row"><span class="p-name">${t.name}</span><span class="p-time">${t.time_estimate}h</span></div>`);
+            
+            // --- UPDATED RENDER LOOP ---
+            data.assignments.forEach(t => {
+                const dateObj = new Date(t.due_date);
+                const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const timeStr = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                
+                html += `
+                <div class="prediction-row">
+                    <div class="p-info">
+                        <span class="p-name">${t.name}</span>
+                        <span class="p-date">Due: ${dateStr} @ ${timeStr}</span>
+                    </div>
+                    <span class="p-time">${t.time_estimate}h</span>
+                </div>`;
+            });
+            // ---------------------------
+            
             document.getElementById('predictionList').innerHTML = html;
             const dl = document.getElementById('downloadLink'); dl.href = data.ics_url; dl.download = "Schedule.ics";
             resArea.scrollIntoView({ behavior: 'smooth' });
