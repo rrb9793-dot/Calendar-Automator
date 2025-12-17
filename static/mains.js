@@ -1,174 +1,367 @@
 // --- CONFIGURATION ---
-const MAJORS = ["Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", "Social Sciences", "Arts & Humanities", "Health & Education"];
-const ASSIGNMENT_TYPES = ["Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study"];
+const MAJORS = [
+    "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", 
+    "Social Sciences", "Arts & Humanities", "Health & Education"
+];
+
+const ASSIGNMENT_TYPES = [
+    "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", 
+    "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study"
+];
+
 const RESOURCES = ["Textbook / class materials", "AI / Chatgpt", "Google/internet"];
 const LOCATIONS = ["At home/private setting", "School/library", "Other public setting (cafe, etc.)"];
 
+// --- MAIN INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
-    const opts = (id, arr, na) => {
-        const s = document.getElementById(id); s.innerHTML = '';
-        if(na) s.add(new Option("N/A", "N/A")); else s.add(new Option("-- Select --", ""));
-        arr.forEach(x => s.add(new Option(x, x)));
+    console.log("🚀 StudentOS Frontend Initialized");
+
+    // 1. Populate Dropdowns
+    const majorSel = document.getElementById('major');
+    const secSel = document.getElementById('second_concentration');
+    const minorSel = document.getElementById('minor');
+
+    const addOpts = (sel, includeNA=false) => {
+        if(!sel) return;
+        sel.innerHTML = ''; 
+        if(includeNA) sel.add(new Option("N/A", "N/A"));
+        else sel.add(new Option("-- Select --", ""));
+        MAJORS.forEach(m => sel.add(new Option(m, m)));
     };
-    // Initialize Dropdowns
-    opts('major', MAJORS); 
-    opts('second_concentration', MAJORS, true); 
-    opts('minor', MAJORS, true);
-    
+
+    addOpts(majorSel, false);
+    addOpts(secSel, true);
+    addOpts(minorSel, true);
+
+    // 2. Init Time Pickers
     initTimePickers();
+    
+    // 3. Add Initial Rows
     addAssignmentRow();
     addPdfRow();
 
-    document.getElementById('addAssignmentBtn').onclick = addAssignmentRow;
-    document.getElementById('addPdfBtn').onclick = addPdfRow;
-    document.getElementById('submitBtn').onclick = handleSubmit;
-    
-    // --- AUTOFILL LISTENER (The Fix) ---
-    const em = document.getElementById('email');
-    if(em) {
-        em.addEventListener('blur', async () => {
-            if(!em.value.includes('@')) return;
-            em.style.opacity = "0.5"; // Visual feedback
-            try {
-                const r = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(em.value)}`);
-                if(r.ok) {
-                    const d = await r.json();
-                    console.log("Found User Data:", d); // Debugging
+    // 4. Attach General Event Listeners
+    const addAssignBtn = document.getElementById('addAssignmentBtn');
+    if (addAssignBtn) addAssignBtn.addEventListener('click', addAssignmentRow);
 
-                    // 1. Simple Fields
-                    if(d.year) document.getElementById('studentYear').value = d.year;
-                    if(d.timezone) document.getElementById('timezone').value = d.timezone;
-                    if(d.major) document.getElementById('major').value = d.major;
-                    if(d.second_concentration) document.getElementById('second_concentration').value = d.second_concentration;
-                    if(d.minor) document.getElementById('minor').value = d.minor;
+    const addPdfBtn = document.getElementById('addPdfBtn');
+    if (addPdfBtn) addPdfBtn.addEventListener('click', addPdfRow);
 
-                    // 2. Complex Time Pickers
-                    setPickerValue('weekdayStart', d.weekdayStart);
-                    setPickerValue('weekdayEnd', d.weekdayEnd);
-                    setPickerValue('weekendStart', d.weekendStart);
-                    setPickerValue('weekendEnd', d.weekendEnd);
-                }
-            } catch(e) { 
-                console.error("Autofill Error:", e); 
-            } finally { 
-                em.style.opacity = "1"; 
+    const submitBtn = document.getElementById('submitBtn');
+    if (submitBtn) submitBtn.addEventListener('click', handleSubmit);
+
+    // --- 5. AUTOFILL LOGIC (THE FIX) ---
+    const emailInput = document.getElementById('email');
+
+    if (emailInput) {
+        console.log("✅ Email Input Found - Attaching Listeners");
+        
+        // Listener 1: Blur (Clicking out)
+        emailInput.addEventListener('blur', () => {
+            console.log("👀 Blur Event Detected");
+            fetchUserPreferences(emailInput);
+        });
+
+        // Listener 2: Enter Key
+        emailInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                console.log("↵ Enter Key Detected");
+                e.preventDefault(); 
+                fetchUserPreferences(emailInput);
+                emailInput.blur(); 
             }
         });
+    } else {
+        console.error("❌ CRITICAL: Email input field not found in DOM");
     }
 });
 
-// --- HELPER: Set Time Picker Value ---
-function setPickerValue(id, timeStr) {
-    if (!timeStr) return;
-    const parts = timeStr.split(':'); // e.g., "09:00" -> ["09", "00"]
-    if (parts.length < 2) return;
+// --- HELPER FUNCTIONS ---
 
-    const container = document.getElementById(id);
-    const selects = container.querySelectorAll('select');
-    if (selects.length === 2) {
-        selects[0].value = parts[0]; // Set Hour
-        selects[1].value = parts[1]; // Set Minute
+async function fetchUserPreferences(emailInput) {
+    const email = emailInput.value.trim();
+    if (!email || !email.includes('@')) {
+        console.log("⚠️ Invalid email, skipping fetch");
+        return;
+    }
+
+    console.log(`🔍 Fetching preferences for: ${email}`);
+    emailInput.style.opacity = "0.5"; 
+
+    try {
+        const res = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(email)}`);
+        
+        if (!res.ok) {
+            console.warn("⚠️ User not found in DB (404)");
+            emailInput.style.opacity = "1";
+            return;
+        }
+
+        const data = await res.json();
+        console.log("✅ DB Data Received:", data);
+
+        // Helper to set values safely
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (el && val && val !== 'null') {
+                console.log(`   -> Setting ${id} to "${val}"`);
+                el.value = val;
+            }
+        };
+
+        setVal('studentYear', data.year);
+        setVal('timezone', data.timezone);
+        setVal('major', data.major);
+        setVal('second_concentration', data.second_concentration);
+        setVal('minor', data.minor);
+
+        // Helper to set Time Pickers
+        const setTime = (id, val) => {
+            if(!val || val === 'null') return;
+            let [h, m] = val.split(':');
+            if (h.length === 1) h = '0' + h; // Pad single digits (9 -> 09)
+            
+            const el = document.getElementById(id);
+            if(el) {
+                const selects = el.querySelectorAll('select');
+                if(selects.length === 2) { 
+                    console.log(`   -> Setting ${id} to ${h}:${m}`);
+                    selects[0].value = h; 
+                    selects[1].value = m; 
+                }
+            }
+        };
+
+        setTime('weekdayStart', data.weekdayStart);
+        setTime('weekdayEnd', data.weekdayEnd);
+        setTime('weekendStart', data.weekendStart);
+        setTime('weekendEnd', data.weekendEnd);
+
+        emailInput.style.borderColor = "#10b981"; // Success Green
+
+    } catch (err) {
+        console.error("❌ Autofill Error:", err);
+    } finally {
+        emailInput.style.opacity = "1";
     }
 }
 
-// --- STANDARD INIT FUNCTIONS ---
 function initTimePickers() {
-    document.querySelectorAll('.time-picker').forEach(d => {
-        if(d.children.length) return;
-        const h = document.createElement('select'), m = document.createElement('select');
-        for(let i=0;i<24;i++) h.add(new Option(i<10?'0'+i:i, i<10?'0'+i:i));
-        for(let i=0;i<60;i+=15) m.add(new Option(i<10?'0'+i:i, i<10?'0'+i:i));
+    document.querySelectorAll('.time-picker').forEach(container => {
+        if(container.children.length > 0) return;
+        const hourSel = document.createElement('select');
+        const minSel = document.createElement('select');
+        for(let i=0; i<24; i++) {
+            let val = i < 10 ? '0'+i : i;
+            hourSel.add(new Option(val, val));
+        }
+        for(let i=0; i<60; i+=15) { 
+            let val = i < 10 ? '0'+i : i;
+            minSel.add(new Option(val, val));
+        }
         
-        // Default values
-        const def = (d.dataset.default || "09:00").split(':'); 
-        h.value = def[0]; 
-        m.value = def[1];
+        // Handle default values safely
+        const defaultVal = container.dataset.default || "09:00";
+        const defTime = defaultVal.split(':');
         
-        d.append(h); d.innerHTML+='<span style="margin:0 5px">:</span>'; d.append(m);
+        hourSel.value = defTime[0]; 
+        minSel.value = defTime[1]; 
+        
+        container.appendChild(hourSel);
+        container.innerHTML += '<span style="margin:0 5px; font-weight:bold;">:</span>';
+        container.appendChild(minSel);
     });
 }
 
-function getPickerValue(id) { 
-    const s = document.getElementById(id).querySelectorAll('select'); 
-    return `${s[0].value}:${s[1].value}`; 
+function getPickerValue(id) {
+    const container = document.getElementById(id);
+    if (!container) return "00:00";
+    const selects = container.querySelectorAll('select');
+    if (selects.length < 2) return "00:00";
+    return `${selects[0].value}:${selects[1].value}`;
 }
 
+const assignmentsContainer = document.getElementById('assignmentsContainer');
+
 function addAssignmentRow() {
-    const d = document.createElement('div'); d.className = 'syllabus-row';
-    const opts = a => a.map(x => `<option value="${x}">${x}</option>`).join('');
-    d.innerHTML = `
-        <div class="span-2"><label style="font-size:0.7rem">Assignment Name</label><input type="text" class="a-name" placeholder="Task Name"></div>
-        <div><label style="font-size:0.7rem">Due Date</label><input type="date" class="a-date"></div>
-        <div><label style="font-size:0.7rem">Sessions</label><input type="number" class="a-sessions" value="1" min="1"></div>
-        <div><label style="font-size:0.7rem">Type</label><select class="a-type"><option value="">Select</option>${opts(ASSIGNMENT_TYPES)}</select></div>
-        <div><label style="font-size:0.7rem">Field</label><select class="a-field"><option value="">Select</option>${opts(MAJORS)}</select></div>
-        <div><label style="font-size:0.7rem">Resources</label><select class="a-resource">${opts(RESOURCES)}</select></div>
-        <div><label style="font-size:0.7rem">Location</label><select class="a-location">${opts(LOCATIONS)}</select></div>
-        <div class="span-2 checkbox-group">
-            <label style="font-size:0.75rem"><input type="checkbox" class="a-group"> Group?</label>
-            <label style="font-size:0.75rem; margin-left:10px"><input type="checkbox" class="a-person"> In-Person?</label>
+    if (!assignmentsContainer) return;
+    const div = document.createElement('div');
+    div.className = 'syllabus-row';
+    const buildOpts = (arr) => arr.map(x => `<option value="${x}">${x}</option>`).join('');
+
+    div.innerHTML = `
+        <div class="span-2">
+            <label style="font-size:0.7rem;">Assignment Name</label>
+            <input type="text" class="a-name" placeholder="Task Name">
         </div>
-        <div class="span-2" style="text-align:right"><button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove</button></div>
+        <div>
+            <label style="font-size:0.7rem;">Due Date</label>
+            <input type="date" class="a-date">
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Sessions Needed</label>
+            <input type="number" class="a-sessions" value="1" min="1">
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Type</label>
+            <select class="a-type"><option value="">Select...</option>${buildOpts(ASSIGNMENT_TYPES)}</select>
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Field of Study</label>
+            <select class="a-field"><option value="">Select...</option>${buildOpts(MAJORS)}</select>
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Resources</label>
+            <select class="a-resource">${buildOpts(RESOURCES)}</select>
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Location</label>
+            <select class="a-location">${buildOpts(LOCATIONS)}</select>
+        </div>
+        <div class="span-2 checkbox-group">
+            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
+                <input type="checkbox" class="a-group" style="width:auto; margin-right:5px;"> Work in Group?
+            </label>
+            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
+                <input type="checkbox" class="a-person" style="width:auto; margin-right:5px;"> Submit In-Person?
+            </label>
+        </div>
+        <div class="span-2" style="text-align:right;">
+            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove Task</button>
+        </div>
     `;
-    document.getElementById('assignmentsContainer').appendChild(d);
+    assignmentsContainer.appendChild(div);
 }
 
 function addPdfRow() {
-    const d = document.createElement('div'); d.className = 'syllabus-row'; d.style.gridTemplateColumns = "1fr 50px";
-    d.innerHTML = `<div><label style="font-size:0.7rem">Syllabus PDF</label><input type="file" class="pdf-file" accept=".pdf"></div>
-                   <div style="text-align:right; display:flex; align-items:end; justify-content:end"><button class="btn-delete" onclick="this.parentElement.parentElement.remove()">X</button></div>`;
-    document.getElementById('pdfContainer').appendChild(d);
+    const pdfContainer = document.getElementById('pdfContainer');
+    if (!pdfContainer) return;
+
+    const div = document.createElement('div');
+    div.className = 'syllabus-row'; 
+    div.style.gridTemplateColumns = "1fr 1fr 50px"; 
+    
+    div.innerHTML = `
+        <div>
+            <label style="font-size:0.7rem;">Course Name</label>
+            <input type="text" class="pdf-course-name" placeholder="e.g. Quantum Mechanics">
+        </div>
+        <div>
+            <label style="font-size:0.7rem;">Syllabus PDF</label>
+            <input type="file" class="pdf-file" accept=".pdf">
+        </div>
+        <div style="text-align:right; display:flex; align-items:end; justify-content:end;">
+            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">X</button>
+        </div>
+    `;
+    pdfContainer.appendChild(div);
 }
 
 async function handleSubmit() {
-    const btn = document.getElementById('submitBtn'); btn.textContent = "PROCESSING..."; btn.disabled = true;
+    const btn = document.getElementById('submitBtn');
+    btn.textContent = "PROCESSING...";
+    btn.disabled = true;
+
     try {
-        const survey = { email: document.getElementById('email').value, year: document.getElementById('studentYear').value, major: document.getElementById('major').value };
-        const prefs = { timezone: document.getElementById('timezone').value, weekdayStart: getPickerValue('weekdayStart'), weekdayEnd: getPickerValue('weekdayEnd'), weekendStart: getPickerValue('weekendStart'), weekendEnd: getPickerValue('weekendEnd') };
-        
+        const surveyData = {
+            email: document.getElementById('email').value,
+            year: document.getElementById('studentYear').value,
+            major: document.getElementById('major').value,
+            second_concentration: document.getElementById('second_concentration').value,
+            minor: document.getElementById('minor').value
+        };
+
+        const preferences = {
+            timezone: document.getElementById('timezone').value, 
+            weekdayStart: getPickerValue('weekdayStart'),
+            weekdayEnd: getPickerValue('weekdayEnd'),
+            weekendStart: getPickerValue('weekendStart'),
+            weekendEnd: getPickerValue('weekendEnd')
+        };
+
         const courses = [];
-        document.querySelectorAll('#assignmentsContainer .syllabus-row').forEach(r => {
-            if(r.querySelector('.a-name')) courses.push({
-                assignment_name: r.querySelector('.a-name').value, due_date: r.querySelector('.a-date').value,
-                work_sessions: r.querySelector('.a-sessions').value, assignment_type: r.querySelector('.a-type').value,
-                field_of_study: r.querySelector('.a-field').value
-            });
+        document.querySelectorAll('#assignmentsContainer .syllabus-row').forEach(row => {
+            if (row.querySelector('.a-name')) {
+                const item = {
+                    assignment_name: row.querySelector('.a-name').value,
+                    due_date: row.querySelector('.a-date').value,
+                    work_sessions: parseInt(row.querySelector('.a-sessions').value) || 1,
+                    assignment_type: row.querySelector('.a-type').value,
+                    field_of_study: row.querySelector('.a-field').value,
+                    external_resources: row.querySelector('.a-resource').value,
+                    work_location: row.querySelector('.a-location').value,
+                    work_in_group: row.querySelector('.a-group').checked ? "Yes" : "No",
+                    submitted_in_person: row.querySelector('.a-person').checked ? "Yes" : "No"
+                };
+                if (item.assignment_name && item.due_date) courses.push(item);
+            }
         });
 
-        const fd = new FormData();
-        fd.append('data', JSON.stringify({ survey, courses, preferences: prefs }));
-        let pIdx = 0;
-        document.querySelectorAll('#pdfContainer .pdf-file').forEach(f => { if(f.files.length) fd.append(`pdf_${pIdx++}`, f.files[0]); });
-        fd.append('pdf_count', pIdx);
-        const ics = document.getElementById('icsUpload'); if(ics.files.length) fd.append('ics', ics.files[0]);
+        const formData = new FormData();
+        formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
-        const res = await fetch('/api/generate-schedule', { method: 'POST', body: fd });
-        const data = await res.json();
-        
-        if(res.ok) {
+        let pdfIndex = 0;
+        document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
+            const fileInput = row.querySelector('.pdf-file');
+            const nameInput = row.querySelector('.pdf-course-name');
+            if (fileInput && fileInput.files.length > 0) {
+                formData.append(`pdf_${pdfIndex}`, fileInput.files[0]);
+                formData.append(`course_name_${pdfIndex}`, nameInput.value || "Unknown Course");
+                pdfIndex++;
+            }
+        });
+        formData.append('pdf_count', pdfIndex);
+
+        const icsInput = document.getElementById('icsUpload');
+        if(icsInput && icsInput.files.length > 0) formData.append('ics', icsInput.files[0]);
+
+        const response = await fetch('/api/generate-schedule', { method: 'POST', body: formData });
+        const result = await response.json();
+
+        if (response.ok) {
             btn.textContent = "DONE";
-            const resArea = document.getElementById('resultArea'); resArea.style.display = 'block';
-            let html = '<div class="prediction-header"><h5>Workload</h5></div>';
-            
-            data.assignments.forEach(t => {
-                const dateObj = new Date(t.due_date);
-                const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                const timeStr = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            const resultArea = document.getElementById('resultArea');
+            const downloadLink = document.getElementById('downloadLink');
+            const predictionList = document.getElementById('predictionList');
+
+            resultArea.style.display = 'block';
+
+            if (result.assignments && result.assignments.length > 0) {
+                let html = '<div class="prediction-header"><h5>Calculated Workloads</h5></div>';
                 
-                html += `
-                <div class="prediction-row">
-                    <div class="p-info">
-                        <span class="p-name">${t.name}</span>
-                        <span class="p-date">Due: ${dateStr} @ ${timeStr}</span>
-                    </div>
-                    <span class="p-time">${t.time_estimate}h</span>
-                </div>`;
-            });
-            
-            document.getElementById('predictionList').innerHTML = html;
-            const dl = document.getElementById('downloadLink'); dl.href = data.ics_url; dl.download = "Schedule.ics";
-            resArea.scrollIntoView({ behavior: 'smooth' });
-        } else alert(data.error);
-    } catch(e) { console.error(e); alert("Error"); }
-    finally { setTimeout(() => { btn.disabled=false; btn.textContent="Initialize Optimization"; }, 2000); }
+                // --- UPDATED WORKLOAD DISPLAY ---
+                result.assignments.forEach(task => {
+                    const dateObj = new Date(task.due_date);
+                    const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    const timeStr = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                    
+                    html += `
+                        <div class="prediction-row">
+                            <div class="p-info">
+                                <span class="p-name">${task.name}</span>
+                                <span class="p-date">Due: ${dateStr} @ ${timeStr}</span>
+                            </div>
+                            <span class="p-time">${task.time_estimate}h</span>
+                        </div>
+                    `;
+                });
+                // --------------------------------
+                
+                predictionList.innerHTML = html;
+            }
+
+            if (result.ics_url) {
+                downloadLink.href = result.ics_url;
+                downloadLink.download = "My_Study_Schedule.ics";
+            }
+            resultArea.scrollIntoView({ behavior: 'smooth' });
+        } else {
+            alert("Error: " + (result.error || "Unknown"));
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Request failed. See console.");
+    } finally {
+        setTimeout(() => { btn.disabled = false; btn.textContent = "Initialize Optimization"; }, 2000);
+    }
 }
