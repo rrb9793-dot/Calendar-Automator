@@ -130,8 +130,6 @@ def generate_schedule():
 
         # 3. PREDICTION & DB SAVE
         formatted_assignments = []
-        HEAVY_TASKS = ['Coding Assignment', 'Research Paper']
-        MEDIUM_TASKS = ['Problem Set', 'Modeling', 'Case Study', 'Creative Writing/Essay']
         
         for i, item in enumerate(all_assignments):
             # --- FINAL GATEKEEPER CHECK ---
@@ -153,22 +151,21 @@ def generate_schedule():
                 if survey_data.get('email'):
                     db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
-            # --- BRANCH 2: PDF ---
+            # --- BRANCH 2: PDF (UPDATED) ---
             else:
                 is_exam = (category == "Exam")
                 
+                # Retrieve AI recommended sessions (passed from syllabus_parser)
+                # Default to 1 if not found
+                ai_sessions = int(item.get("Sessions", 1))
+
                 if is_exam:
                     sessions_needed = 1
                     predicted_hours = 1.25 
                     is_fixed_event = True  
-                elif category in HEAVY_TASKS:
-                    sessions_needed = 3
-                    is_fixed_event = False
-                elif category in MEDIUM_TASKS:
-                    sessions_needed = 2
-                    is_fixed_event = False
                 else:
-                    sessions_needed = 1
+                    # Use the AI's recommendation directly
+                    sessions_needed = max(1, ai_sessions)
                     is_fixed_event = False
                     
                 if not is_exam:
