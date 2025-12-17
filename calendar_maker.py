@@ -12,6 +12,7 @@ from collections import defaultdict
 # BLOCK 1 & 2: INPUT PARSER
 # ==========================================================
 def parse_request_inputs(json_data):
+    # 1. TIMEZONE & WORK WINDOWS
     user_prefs = json_data.get("user_preferences", {})
     user_tz_str = user_prefs.get("timezone", "America/New_York") 
     try:
@@ -22,6 +23,7 @@ def parse_request_inputs(json_data):
     ww = user_prefs.get("work_windows", {})
     work_windows = {}
 
+    # Defaults
     wd_start = float(ww.get("weekday_start_hour", 9))
     wd_end   = float(ww.get("weekday_end_hour", 21))
     we_start = float(ww.get("weekend_start_hour", 10))
@@ -33,11 +35,13 @@ def parse_request_inputs(json_data):
     for wd in range(7):
         work_windows[wd] = [weekday_block] if wd <= 4 else [weekend_block]
 
+    # 2. ASSIGNMENTS
     raw_assignments = json_data.get("assignments", [])
     
     if raw_assignments:
         df_assignments = pd.DataFrame(raw_assignments)
         
+        # Standardize Columns
         column_map = {
             "id": "assignment_id",
             "name": "assignment_name",
@@ -47,9 +51,11 @@ def parse_request_inputs(json_data):
         }
         df_assignments.rename(columns=column_map, inplace=True)
         
+        # Format Dates & FIX TIMEZONE CRASH
         if "due_dates" in df_assignments.columns:
             df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed', errors='coerce')
             
+            # Force Timezone Awareness to match local_tz
             if not df_assignments.empty:
                 if df_assignments["due_dates"].dt.tz is None:
                     df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_localize(local_tz, ambiguous='NaT', nonexistent='shift_forward')
@@ -58,6 +64,7 @@ def parse_request_inputs(json_data):
 
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
+        # Clean Numbers
         if "time_spent_hours" in df_assignments.columns:
             df_assignments["time_spent_hours"] = pd.to_numeric(df_assignments["time_spent_hours"], errors='coerce').fillna(2.0)
         else:
@@ -246,18 +253,18 @@ def generate_sessions_from_assignments(df_assignments, current_date):
                 "assignment_type": row.get("assignment_type", "")
             })
 
-    # 🟢 SORTING LOGIC:
-    # Key 1: is_overdue (False=0, True=1) -> Future tasks come first!
-    # Key 2: full_due_dt -> Then sort by time
+    # SORTING LOGIC: Future tasks first, then sort by date
     return sorted(sessions, key=lambda x: (x["is_overdue"], x["full_due_dt"]))
 
 # ==========================================================
-# BLOCK 4: SCHEDULING ENGINE (TWO-PHASE)
+# BLOCK 4: SCHEDULING ENGINE (SPACING + FAILSAFE)
 # ==========================================================
 def schedule_sessions_load_balanced(free_blocks_map, sessions, 
                                     max_hours_per_day, 
                                     break_minutes=15,
-                                    daily_usage_tracker=None):
+                                    daily_usage_tracker=None,
+                                    daily_assignments_tracker=None, # NEW: Tracks what topics are on what day
+                                    enforce_spacing=False):         # NEW: Switch to turn spacing ON/OFF
     scheduled = []
     unscheduled = []
     
@@ -265,6 +272,9 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
         daily_usage_minutes = defaultdict(float)
     else:
         daily_usage_minutes = daily_usage_tracker
+
+    if daily_assignments_tracker is None:
+        daily_assignments_tracker = defaultdict(set)
 
     max_minutes = max_hours_per_day * 60
     break_duration = timedelta(minutes=break_minutes) 
@@ -275,12 +285,18 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
         placed = False
         duration_mins = session["duration_minutes"]
         duration = timedelta(minutes=duration_mins)
+        assign_name = session["assignment_name"]
 
         for d in sorted_dates:
             if d > session["due_date"]: break
             
-            # Phase Check (8h or 24h)
+            # 1. CHECK HOURS (Water Logic)
             if daily_usage_minutes[d] + duration_mins > max_minutes: continue
+
+            # 2. CHECK SPACING (Anti-Stacking Logic)
+            # If we enforce spacing AND this assignment is already on this day, skip this day.
+            if enforce_spacing and assign_name in daily_assignments_tracker[d]:
+                continue
 
             day_blocks = free_blocks_map[d]
             for i, (start, end) in enumerate(day_blocks):
@@ -296,7 +312,9 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
                     rec["date"] = d
                     scheduled.append(rec)
                     
+                    # Update Trackers
                     daily_usage_minutes[d] += duration_mins
+                    daily_assignments_tracker[d].add(assign_name) # Mark this topic as "done for today"
                     
                     new_start = session_end + break_duration 
                     if new_start < end:
@@ -418,27 +436,28 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
     buffered_busy = add_buffer_to_busy_timeline(merged_busy, buffer_minutes=15)
     free_blocks = build_free_blocks(work_windows, buffered_busy, horizon_start, horizon_end, local_tz)
     
-    # Pass date for late detection
     floating_sessions = generate_sessions_from_assignments(floating_df, today_dt.date())
 
     # =========================================================================
-    # THE "TWO-PASS" LOGIC (Strategy: Save Future Grade, Then Crunch Late)
+    # THE "TWO-PASS" LOGIC (With Spacing + Failsafe)
     # =========================================================================
     daily_usage_tracker = defaultdict(float)
+    daily_assignments_tracker = defaultdict(set) # Keeps track of what topic is on what day
 
-    # PHASE 1: Healthy Mode (Limit 8 hours)
-    # Because of our sorting, this will prioritize FUTURE assignments.
+    # PHASE 1: Healthy Mode (Limit 8 hours) + SPACING ON
+    # This tries to put Session 1 on Mon and Session 2 on Tue.
     scheduled_p1, unscheduled_p1 = schedule_sessions_load_balanced(
         free_blocks, 
         floating_sessions, 
         max_hours_per_day=8,      
         break_minutes=15,
-        daily_usage_tracker=daily_usage_tracker
+        daily_usage_tracker=daily_usage_tracker,
+        daily_assignments_tracker=daily_assignments_tracker,
+        enforce_spacing=True # <--- Soft Constraint: ON
     )
 
-    # PHASE 2: True Failsafe (Crunch Mode - 24 hours)
-    # This catches the OVERDUE assignments (which were sorted last)
-    # and schedules them in the "overtime" hours of the day.
+    # PHASE 2: True Failsafe (Crunch Mode) + SPACING OFF
+    # If the deadline is tomorrow, Spacing Check is IGNORED to ensure completion.
     if unscheduled_p1:
         print(f"⚠️ FAILSAFE ACTIVATED: {len(unscheduled_p1)} tasks pushed to overdrive.")
         scheduled_p2, unscheduled_final = schedule_sessions_load_balanced(
@@ -446,7 +465,9 @@ def process_schedule_request(json_data, uploaded_files_bytes, output_folder):
             unscheduled_p1,         
             max_hours_per_day=24,   # Unlimited Crunch
             break_minutes=15,
-            daily_usage_tracker=daily_usage_tracker 
+            daily_usage_tracker=daily_usage_tracker,
+            daily_assignments_tracker=daily_assignments_tracker,
+            enforce_spacing=False # <--- Soft Constraint: OFF (Just get it done!)
         )
     else:
         scheduled_p2 = []
