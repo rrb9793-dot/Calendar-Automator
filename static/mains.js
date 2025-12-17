@@ -3,12 +3,10 @@ const MAJORS = [
     "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", 
     "Social Sciences", "Arts & Humanities", "Health & Education"
 ];
-
 const ASSIGNMENT_TYPES = [
     "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", 
     "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study"
 ];
-
 const RESOURCES = ["Textbook / class materials", "AI / Chatgpt", "Google/internet"];
 const LOCATIONS = ["At home/private setting", "School/library", "Other public setting (cafe, etc.)"];
 
@@ -29,21 +27,14 @@ document.addEventListener('DOMContentLoaded', () => {
     addOpts(secSel, true);
     addOpts(minorSel, true);
 
-    // Init Time Pickers
     initTimePickers();
-    
-    // Add Initial Rows
     addAssignmentRow();
-    addPdfRow(); // Add one empty PDF row by default
+    addPdfRow();
 
-    // --- EVENT LISTENERS (MOVED INSIDE HERE) ---
-    // This prevents the "Cannot read properties of null" error
     const addAssignBtn = document.getElementById('addAssignmentBtn');
     if (addAssignBtn) addAssignBtn.addEventListener('click', addAssignmentRow);
-
     const addPdfBtn = document.getElementById('addPdfBtn');
     if (addPdfBtn) addPdfBtn.addEventListener('click', addPdfRow);
-
     const submitBtn = document.getElementById('submitBtn');
     if (submitBtn) submitBtn.addEventListener('click', handleSubmit);
 });
@@ -128,20 +119,17 @@ function addAssignmentRow() {
     assignmentsContainer.appendChild(div);
 }
 
-// --- PDF ROW GENERATOR ---
+// --- PDF ROW GENERATOR (Simplified) ---
 function addPdfRow() {
     const pdfContainer = document.getElementById('pdfContainer');
     if (!pdfContainer) return;
 
     const div = document.createElement('div');
     div.className = 'syllabus-row'; 
-    div.style.gridTemplateColumns = "1fr 1fr 50px"; 
+    div.style.gridTemplateColumns = "1fr 50px"; 
     
+    // Removed the "Course Name" text input
     div.innerHTML = `
-        <div>
-            <label style="font-size:0.7rem;">Course Name</label>
-            <input type="text" class="pdf-course-name" placeholder="e.g. Quantum Mechanics">
-        </div>
         <div>
             <label style="font-size:0.7rem;">Syllabus PDF</label>
             <input type="file" class="pdf-file" accept=".pdf">
@@ -177,7 +165,7 @@ async function handleSubmit() {
         };
 
         const courses = [];
-        document.querySelectorAll('.syllabus-row').forEach(row => {
+        document.querySelectorAll('#assignmentsContainer .syllabus-row').forEach(row => {
             if (row.querySelector('.a-name')) {
                 const item = {
                     assignment_name: row.querySelector('.a-name').value,
@@ -201,10 +189,9 @@ async function handleSubmit() {
         let pdfIndex = 0;
         document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
             const fileInput = row.querySelector('.pdf-file');
-            const nameInput = row.querySelector('.pdf-course-name');
+            // NO COURSE NAME CHECK HERE
             if (fileInput && fileInput.files.length > 0) {
                 formData.append(`pdf_${pdfIndex}`, fileInput.files[0]);
-                formData.append(`course_name_${pdfIndex}`, nameInput.value || "Unknown Course");
                 pdfIndex++;
             }
         });
@@ -253,25 +240,18 @@ async function handleSubmit() {
     }
 }
 
-// --- NEW: AUTOFILL FEATURE (ROBUST VERSION) ---
+// --- AUTOFILL FEATURE ---
 const emailInput = document.getElementById('email');
 
 async function fetchUserPreferences() {
     const email = emailInput.value.trim();
     if (email && email.includes('@')) {
-        console.log("🔍 Checking database for:", email);
         emailInput.style.opacity = "0.5"; 
-        emailInput.style.borderColor = "var(--grid-line)"; 
-
         try {
             const res = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(email)}`);
-            if (!res.ok) {
-                console.log("User not found in DB (New User)");
-                return;
-            }
+            if (!res.ok) return;
             const data = await res.json();
-            console.log("✅ Data found:", data);
-
+            
             const setVal = (id, val) => {
                 const el = document.getElementById(id);
                 if (el && val && val !== 'null') el.value = val;
@@ -296,13 +276,11 @@ async function fetchUserPreferences() {
                     }
                 }
             };
-
             setTime('weekdayStart', data.weekdayStart);
             setTime('weekdayEnd', data.weekdayEnd);
             setTime('weekendStart', data.weekendStart);
             setTime('weekendEnd', data.weekendEnd);
 
-            emailInput.style.borderColor = "var(--accent-cyan)";
         } catch (err) {
             console.error("Autofill Error:", err);
         } finally {
