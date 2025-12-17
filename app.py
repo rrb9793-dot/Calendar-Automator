@@ -48,14 +48,8 @@ def get_user_preferences_route():
     email = request.args.get('email')
     if not email:
         return jsonify({}), 400
-    
-    # Fetch from DB
     data = db.get_user_preferences(email)
-    
-    if data:
-        return jsonify(data)
-    else:
-        return jsonify({}), 404
+    return jsonify(data) if data else (jsonify({}), 404)
 
 # --- GENERATE SCHEDULE ROUTE ---
 @app.route('/api/generate-schedule', methods=['POST'])
@@ -69,11 +63,9 @@ def generate_schedule():
         survey_data = req_data.get('survey', {})
         manual_courses = req_data.get('courses', [])
 
-        # --- SAVE PREFERENCES ---
         if survey_data.get('email'):
             db.save_user_preferences(survey_data, frontend_prefs)
 
-        # B. User ICS Files
         ics_files_bytes = []
         if 'ics' in request.files:
             files = request.files.getlist('ics')
@@ -85,19 +77,16 @@ def generate_schedule():
         # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries (USER INPUTS REIGN SUPREME HERE)
+        # A. Manual Entries
         for course in manual_courses:
             assign_name = course.get('assignment_name', 'Untitled')
             course_field = course.get('field_of_study', 'General')
-            
-            # Append Course Name here to match Parser style
             final_name = f"{assign_name} ({course_field})"
 
             all_assignments.append({
                 "source_type": "manual",
                 "Assignment": final_name, 
                 "Date": course.get('due_date'),
-                # For manual tasks, we assume user input due time or default to end of day
                 "Time": "23:59", 
                 "Course": course_field,
                 "Category": course.get('assignment_type', 'p_set'),
@@ -106,15 +95,11 @@ def generate_schedule():
 
         # B. PDF Entries
         pdf_count = int(request.form.get('pdf_count', 0))
-        
         if pdf_count > 0:
             print(f"Processing {pdf_count} PDF(s) with Gemini...", flush=True)
             pdf_dfs = []
-            
             for i in range(pdf_count):
                 pdf = request.files.get(f'pdf_{i}')
-                # We NO LONGER check for manual course_name here.
-                
                 if not pdf or pdf.filename == '': continue
                 
                 filename = secure_filename(pdf.filename)
@@ -122,24 +107,16 @@ def generate_schedule():
                 pdf.save(path)
                 
                 try:
-                    # Parse using AI for course name
                     df = syllabus_parser.parse_syllabus_to_data(path, GEMINI_API_KEY)
-                    
                     print(f"\n--- 📄 PARSER RESULT FOR: {filename} ---", flush=True)
                     if df is not None and not df.empty:
-                        # .to_string() forces the logs to show the WHOLE table
                         print(df.to_string(), flush=True) 
+                        pdf_dfs.append(df)
                     else:
                         print("❌ Parser returned EMPTY or NONE.", flush=True)
-                    print("------------------------------------------\n", flush=True)
-
-                    if df is not None and not df.empty:
-                        pdf_dfs.append(df)
-                    time.sleep(2) 
-                
                 except ResourceExhausted:
                     print("❌ Google AI Quota Exceeded.", flush=True)
-                    return jsonify({'error': 'Google AI Quota Exceeded. Please wait.'}), 429
+                    return jsonify({'error': 'Google AI Quota Exceeded.'}), 429
                 except Exception as e:
                     print(f"❌ Error processing {filename}: {e}", flush=True)
                     continue
@@ -153,64 +130,49 @@ def generate_schedule():
 
         # 3. PREDICTION & DB SAVE
         formatted_assignments = []
-        
-        # Hard PDF tasks that get 2 sessions by default
         HARD_TASKS = ['Problem Set', 'Coding Assignment', 'Research Paper', 'Modeling', 'Case Study']
         
         for i, item in enumerate(all_assignments):
             category = item.get('Category', 'p_set')
             
-            # --- BRANCH 1: MANUAL (User overrides everything) ---
+            # --- BRANCH 1: MANUAL (Overrides) ---
             if item["source_type"] == "manual":
                 raw = item["raw_details"]
-                
-                # Use User's exact inputs
                 assignment_details = raw 
-                
-                # Predict time (Manual tasks always go through predictor)
                 predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
-                
-                # Manual inputs for sessions
                 sessions_needed = int(raw.get('work_sessions', 1))
-                is_fixed_event = False # Manual tasks are "To-Dos", not fixed events
+                is_fixed_event = False 
 
                 if survey_data.get('email'):
                     db.save_assignment(survey_data['email'], assignment_details, predicted_hours)
 
-            # --- BRANCH 2: PDF (Apply defaults) ---
+            # --- BRANCH 2: PDF (Defaults) ---
             else:
                 is_exam = (category == "Exam")
                 
-                # Defaults for PDF
                 if is_exam:
                     sessions_needed = 1
-                    predicted_hours = 1.25 # Default 1.25 hours (75 mins) for Exams
-                    is_fixed_event = True  # <--- CRITICAL: Tells calendar this is a specific time
+                    predicted_hours = 1.25 # Fixed Exam duration
+                    is_fixed_event = True  # Blocks calendar
                 else:
                     sessions_needed = 2 if category in HARD_TASKS else 1
                     is_fixed_event = False
                     
-                    # Construct details for predictor (Assumes Home/Google)
                     assignment_details = {
                         "assignment_name": item.get("Assignment", "Untitled"),
                         "work_sessions": sessions_needed,
                         "assignment_type": category, 
                         "field_of_study": survey_data.get('major', 'Business'),
-                        "external_resources": 'Google/internet',       # Default
-                        "work_location": 'At home/private setting',    # Default
-                        "work_in_group": 'No',
+                        "external_resources": 'Google/internet', 
+                        "work_location": 'At home/private setting', 
+                        "work_in_group": 'No', 
                         "submitted_in_person": 'No'
                     }
                     predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
 
             # Formatting
             date_str = item.get("Date")
-            time_str = item.get("Time")
-            
-            # If no time, manual default to end of day.
-            # If parser didn't find time for Exam, it defaults to 23:59 (imperfect, but safe).
-            if not time_str: time_str = "23:59"
-            
+            time_str = item.get("Time") if item.get("Time") else "23:59"
             full_due_string = f"{date_str} {time_str}"
             
             formatted_assignments.append({
@@ -221,7 +183,7 @@ def generate_schedule():
                 "time_estimate": float(predicted_hours), 
                 "sessions_needed": sessions_needed,
                 "assignment_type": category,
-                "is_fixed_event": is_fixed_event # <--- New Flag passed to Calendar Maker
+                "is_fixed_event": is_fixed_event
             })
 
         # 4. CALENDAR GENERATION
@@ -235,13 +197,8 @@ def generate_schedule():
             }
         }
 
-        calendar_input_data = {
-            "user_preferences": backend_preferences,
-            "assignments": formatted_assignments
-        }
-
         result = calendar_maker.process_schedule_request(
-            calendar_input_data, 
+            {"user_preferences": backend_preferences, "assignments": formatted_assignments}, 
             ics_files_bytes,
             app.config['UPLOAD_FOLDER']
         )
@@ -249,17 +206,13 @@ def generate_schedule():
         return jsonify({
             'message': 'Success',
             'ics_url': f"/download/{result['ics_filename']}",
-            'stats': {
-                'scheduled': result['scheduled_count'],
-                'unscheduled': result['unscheduled_count']
-            },
+            'stats': {'scheduled': result['scheduled_count'], 'unscheduled': result['unscheduled_count']},
             'assignments': formatted_assignments
         })
 
     except Exception as e:
         print(f"API Error: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
