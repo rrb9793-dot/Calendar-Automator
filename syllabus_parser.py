@@ -42,13 +42,30 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         f = genai.upload_file(path=pdf_path, display_name="Syllabus")
         while f.state.name == "PROCESSING": time.sleep(1); f = genai.get_file(f.name)
         
-        # Strict Prompt with 'Exam' included
-        prompt = """Extract assignments/exams into JSON.
-        Format: { "metadata": { "course_name": "string", "class_meetings": [{"days": ["Monday"], "start_time": "14:00"}] }, "assignments": [ { "date": "YYYY-MM-DD", "time": "HH:MM", "assignment_name": "string", "category": "STRICT_CATEGORY" } ] }
-        Rules: 
-        1. Dates: YYYY-MM-DD. 
-        2. Times: 24h (HH:MM) or null.
-        3. Category MUST be exactly: "Exam", "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study".
+        # --- UPDATED PROMPT: ASKS FOR FIELD OF STUDY ---
+        prompt = """Extract metadata and assignments from this syllabus into JSON.
+        
+        Output format:
+        {
+            "metadata": {
+                "course_name": "string (Official Name)",
+                "field_of_study": "string (Choose best fit from list below)",
+                "class_meetings": [{"days": ["Monday"], "start_time": "14:00"}]
+            },
+            "assignments": [
+                {
+                    "date": "YYYY-MM-DD",
+                    "time": "HH:MM", 
+                    "assignment_name": "string",
+                    "category": "STRICT_CATEGORY" 
+                }
+            ]
+        }
+        
+        Rules:
+        1. "field_of_study" MUST be one of: "Business", "Tech & Data Science", "Engineering", "Math", "Natural Sciences", "Social Sciences", "Arts & Humanities", "Health & Education".
+        2. "category" MUST be one of: "Exam", "Problem Set", "Coding Assignment", "Research Paper", "Creative Writing/Essay", "Presentation", "Modeling", "Discussion Post", "Readings", "Case Study".
+        3. Dates YYYY-MM-DD. Times 24h.
         """
         
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -65,7 +82,9 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         
         meta = data.get("metadata", {})
         course = meta.get("course_name", "Unknown Course")
-        print(f"--- METADATA: Course={course} ---", flush=True)
+        field = meta.get("field_of_study", "Business") # AI Decided Field
+        
+        print(f"--- METADATA: Course={course}, Field={field} ---", flush=True)
 
         sched_map = {}
         for m in meta.get("class_meetings", []):
@@ -79,8 +98,12 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         rows = []
         for i in data.get("assignments", []):
             rows.append({
-                "Course": course, "Date": i.get("date"), "Time": i.get("time"),
-                "Category": i.get("category", "p_set"), "Assignment": i.get("assignment_name", "Untitled")
+                "Course": course, 
+                "Field": field,  # <--- NEW COLUMN
+                "Date": i.get("date"), 
+                "Time": i.get("time"),
+                "Category": i.get("category", "p_set"), 
+                "Assignment": i.get("assignment_name", "Untitled")
             })
             
         df = pd.DataFrame(rows)
@@ -88,7 +111,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
         df = df.dropna(subset=['Date'])
         df['Time'] = df.apply(lambda r: resolve_time(r, sched_map), axis=1)
-        # Auto-append Course Name
         df['Assignment'] = df.apply(lambda r: f"{r['Assignment']} ({r['Course']})", axis=1)
         return df
 
@@ -98,6 +120,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
 
 def consolidate_assignments(df):
     if df.empty: return df
-    return df.groupby(['Course', 'Date', 'Time', 'Category']).agg({
+    # Group by Field as well so we don't lose it
+    return df.groupby(['Course', 'Field', 'Date', 'Time', 'Category']).agg({
         'Assignment': lambda x: " / ".join(sorted(set(str(s) for s in x if s)))
     }).reset_index().sort_values(by=['Date', 'Time'])
