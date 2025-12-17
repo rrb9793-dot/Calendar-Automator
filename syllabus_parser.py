@@ -42,7 +42,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         f = genai.upload_file(path=pdf_path, display_name="Syllabus")
         while f.state.name == "PROCESSING": time.sleep(1); f = genai.get_file(f.name)
         
-        # --- UPDATED PROMPT: ASKS FOR FIELD OF STUDY ---
         prompt = """Extract metadata and assignments from this syllabus into JSON.
         
         Output format:
@@ -81,10 +80,11 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         if isinstance(data, list): data = {"assignments": data, "metadata": {}}
         
         meta = data.get("metadata", {})
-        course = meta.get("course_name", "Unknown Course")
-        field = meta.get("field_of_study", "Business") # AI Decided Field
+        # Use empty string if unknown so we can detect it later
+        course = meta.get("course_name", "") 
+        field = meta.get("field_of_study", "Business")
         
-        print(f"--- METADATA: Course={course}, Field={field} ---", flush=True)
+        print(f"--- METADATA: Course='{course}', Field='{field}' ---", flush=True)
 
         sched_map = {}
         for m in meta.get("class_meetings", []):
@@ -99,7 +99,7 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         for i in data.get("assignments", []):
             rows.append({
                 "Course": course, 
-                "Field": field,  # <--- NEW COLUMN
+                "Field": field,
                 "Date": i.get("date"), 
                 "Time": i.get("time"),
                 "Category": i.get("category", "p_set"), 
@@ -111,7 +111,18 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
         df = df.dropna(subset=['Date'])
         df['Time'] = df.apply(lambda r: resolve_time(r, sched_map), axis=1)
-        df['Assignment'] = df.apply(lambda r: f"{r['Assignment']} ({r['Course']})", axis=1)
+        
+        # --- SMART NAME FORMATTING ---
+        # Prevents "Assignment Name ()"
+        def format_name(row):
+            name = row['Assignment']
+            course = row['Course']
+            if course and course.strip():
+                return f"{name} ({course})"
+            return name
+            
+        df['Assignment'] = df.apply(format_name, axis=1)
+        
         return df
 
     except Exception as e:
@@ -120,7 +131,6 @@ def parse_syllabus_to_data(pdf_path: str, api_key: str = None):
 
 def consolidate_assignments(df):
     if df.empty: return df
-    # Group by Field as well so we don't lose it
     return df.groupby(['Course', 'Field', 'Date', 'Time', 'Category']).agg({
         'Assignment': lambda x: " / ".join(sorted(set(str(s) for s in x if s)))
     }).reset_index().sort_values(by=['Date', 'Time'])
