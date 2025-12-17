@@ -42,6 +42,7 @@ def home():
 def download_file(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
 
+# --- USER PREFERENCES ROUTE ---
 @app.route('/api/get-user-preferences', methods=['GET'])
 def get_user_preferences_route():
     email = request.args.get('email')
@@ -49,6 +50,7 @@ def get_user_preferences_route():
     data = db.get_user_preferences(email)
     return jsonify(data) if data else (jsonify({}), 404)
 
+# --- GENERATE SCHEDULE ROUTE ---
 @app.route('/api/generate-schedule', methods=['POST'])
 def generate_schedule():
     try:
@@ -123,7 +125,10 @@ def generate_schedule():
 
         # 3. PREDICTION & DB SAVE
         formatted_assignments = []
-        HARD_TASKS = ['Problem Set', 'Coding Assignment', 'Research Paper', 'Modeling', 'Case Study']
+        
+        # --- NEW SESSION LOGIC ---
+        HEAVY_TASKS = ['Coding Assignment', 'Research Paper']
+        MEDIUM_TASKS = ['Problem Set', 'Modeling', 'Case Study', 'Creative Writing/Essay']
         
         for i, item in enumerate(all_assignments):
             category = item.get('Category', 'p_set')
@@ -148,11 +153,18 @@ def generate_schedule():
                     sessions_needed = 1
                     predicted_hours = 1.25 # Fixed Exam duration
                     is_fixed_event = True  # Blocks calendar
+                elif category in HEAVY_TASKS:
+                    sessions_needed = 3    # <--- UPDATED (Coding, Research Paper)
+                    is_fixed_event = False
+                elif category in MEDIUM_TASKS:
+                    sessions_needed = 2    # <--- UPDATED (Essay, P-Set, etc)
+                    is_fixed_event = False
                 else:
-                    sessions_needed = 2 if category in HARD_TASKS else 1
+                    sessions_needed = 1    # Everything else
                     is_fixed_event = False
                     
-                    # B. Context Assumptions (PDF Default: No group, No in-person, Home, Google)
+                # B. Context Assumptions
+                if not is_exam:
                     assignment_details = {
                         "assignment_name": item.get("Assignment", "Untitled"),
                         "work_sessions": sessions_needed,
