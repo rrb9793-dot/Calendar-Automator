@@ -36,8 +36,6 @@ function getPickerValue(id) { const s = document.getElementById(id).querySelecto
 function addAssignmentRow() {
     const d = document.createElement('div'); d.className = 'syllabus-row';
     const opts = a => a.map(x => `<option value="${x}">${x}</option>`).join('');
-    
-    // UPDATED: Changed label from "In-Person?" to "Submitted in Person?"
     d.innerHTML = `
         <div class="span-2"><label style="font-size:0.7rem">Assignment Name</label><input type="text" class="a-name" placeholder="Task Name"></div>
         <div><label style="font-size:0.7rem">Due Date</label><input type="date" class="a-date"></div>
@@ -48,13 +46,14 @@ function addAssignmentRow() {
         <div><label style="font-size:0.7rem">Location</label><select class="a-location">${opts(LOCATIONS)}</select></div>
         <div class="span-2 checkbox-group">
             <label style="font-size:0.75rem"><input type="checkbox" class="a-group"> Group?</label>
-            <label style="font-size:0.75rem; margin-left:10px"><input type="checkbox" class="a-person"> Submitted in Person?</label>
+            <label style="font-size:0.75rem; margin-left:10px"><input type="checkbox" class="a-person"> In-Person?</label>
         </div>
         <div class="span-2" style="text-align:right"><button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove</button></div>
     `;
     document.getElementById('assignmentsContainer').appendChild(d);
 }
 
+// REMOVED TEXT INPUT FOR COURSE NAME
 function addPdfRow() {
     const d = document.createElement('div'); d.className = 'syllabus-row'; d.style.gridTemplateColumns = "1fr 50px";
     d.innerHTML = `<div><label style="font-size:0.7rem">Syllabus PDF</label><input type="file" class="pdf-file" accept=".pdf"></div>
@@ -91,29 +90,7 @@ async function handleSubmit() {
             btn.textContent = "DONE";
             const resArea = document.getElementById('resultArea'); resArea.style.display = 'block';
             let html = '<div class="prediction-header"><h5>Workload</h5></div>';
-            
-            // UPDATED: Date formatting and display logic
-            data.assignments.forEach(t => {
-                let dateDisplay = "";
-                if (t.due_date) {
-                    // Create a readable date format (e.g., "Mon, Jan 15")
-                    const d = new Date(t.due_date);
-                    // Check if date is valid
-                    if (!isNaN(d.getTime())) {
-                        const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-                        dateDisplay = `<span style="font-weight:normal; font-size:0.8em; opacity:0.65; margin-left:10px; font-family:var(--font-body); letter-spacing:0;">(Due: ${dateStr})</span>`;
-                    } else {
-                        // Fallback for raw string if parsing fails
-                        dateDisplay = `<span style="font-weight:normal; font-size:0.8em; opacity:0.65; margin-left:10px;">(Due: ${t.due_date.split(' ')[0]})</span>`;
-                    }
-                }
-
-                html += `<div class="prediction-row">
-                            <span class="p-name">${t.name} ${dateDisplay}</span>
-                            <span class="p-time">${t.time_estimate}h</span>
-                         </div>`;
-            });
-            
+            data.assignments.forEach(t => html += `<div class="prediction-row"><span class="p-name">${t.name}</span><span class="p-time">${t.time_estimate}h</span></div>`);
             document.getElementById('predictionList').innerHTML = html;
             const dl = document.getElementById('downloadLink'); dl.href = data.ics_url; dl.download = "Schedule.ics";
             resArea.scrollIntoView({ behavior: 'smooth' });
