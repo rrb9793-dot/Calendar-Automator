@@ -10,7 +10,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if(na) s.add(new Option("N/A", "N/A")); else s.add(new Option("-- Select --", ""));
         arr.forEach(x => s.add(new Option(x, x)));
     };
-    opts('major', MAJORS); opts('second_concentration', MAJORS, true); opts('minor', MAJORS, true);
+    // Initialize Dropdowns
+    opts('major', MAJORS); 
+    opts('second_concentration', MAJORS, true); 
+    opts('minor', MAJORS, true);
     
     initTimePickers();
     addAssignmentRow();
@@ -19,19 +22,76 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('addAssignmentBtn').onclick = addAssignmentRow;
     document.getElementById('addPdfBtn').onclick = addPdfRow;
     document.getElementById('submitBtn').onclick = handleSubmit;
+    
+    // --- AUTOFILL LISTENER (The Fix) ---
+    const em = document.getElementById('email');
+    if(em) {
+        em.addEventListener('blur', async () => {
+            if(!em.value.includes('@')) return;
+            em.style.opacity = "0.5"; // Visual feedback
+            try {
+                const r = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(em.value)}`);
+                if(r.ok) {
+                    const d = await r.json();
+                    console.log("Found User Data:", d); // Debugging
+
+                    // 1. Simple Fields
+                    if(d.year) document.getElementById('studentYear').value = d.year;
+                    if(d.timezone) document.getElementById('timezone').value = d.timezone;
+                    if(d.major) document.getElementById('major').value = d.major;
+                    if(d.second_concentration) document.getElementById('second_concentration').value = d.second_concentration;
+                    if(d.minor) document.getElementById('minor').value = d.minor;
+
+                    // 2. Complex Time Pickers
+                    setPickerValue('weekdayStart', d.weekdayStart);
+                    setPickerValue('weekdayEnd', d.weekdayEnd);
+                    setPickerValue('weekendStart', d.weekendStart);
+                    setPickerValue('weekendEnd', d.weekendEnd);
+                }
+            } catch(e) { 
+                console.error("Autofill Error:", e); 
+            } finally { 
+                em.style.opacity = "1"; 
+            }
+        });
+    }
 });
 
+// --- HELPER: Set Time Picker Value ---
+function setPickerValue(id, timeStr) {
+    if (!timeStr) return;
+    const parts = timeStr.split(':'); // e.g., "09:00" -> ["09", "00"]
+    if (parts.length < 2) return;
+
+    const container = document.getElementById(id);
+    const selects = container.querySelectorAll('select');
+    if (selects.length === 2) {
+        selects[0].value = parts[0]; // Set Hour
+        selects[1].value = parts[1]; // Set Minute
+    }
+}
+
+// --- STANDARD INIT FUNCTIONS ---
 function initTimePickers() {
     document.querySelectorAll('.time-picker').forEach(d => {
         if(d.children.length) return;
         const h = document.createElement('select'), m = document.createElement('select');
         for(let i=0;i<24;i++) h.add(new Option(i<10?'0'+i:i, i<10?'0'+i:i));
         for(let i=0;i<60;i+=15) m.add(new Option(i<10?'0'+i:i, i<10?'0'+i:i));
-        const def = d.dataset.default.split(':'); h.value=def[0]; m.value=def[1];
+        
+        // Default values
+        const def = (d.dataset.default || "09:00").split(':'); 
+        h.value = def[0]; 
+        m.value = def[1];
+        
         d.append(h); d.innerHTML+='<span style="margin:0 5px">:</span>'; d.append(m);
     });
 }
-function getPickerValue(id) { const s = document.getElementById(id).querySelectorAll('select'); return `${s[0].value}:${s[1].value}`; }
+
+function getPickerValue(id) { 
+    const s = document.getElementById(id).querySelectorAll('select'); 
+    return `${s[0].value}:${s[1].value}`; 
+}
 
 function addAssignmentRow() {
     const d = document.createElement('div'); d.className = 'syllabus-row';
@@ -90,7 +150,6 @@ async function handleSubmit() {
             const resArea = document.getElementById('resultArea'); resArea.style.display = 'block';
             let html = '<div class="prediction-header"><h5>Workload</h5></div>';
             
-            // --- UPDATED RENDER LOOP ---
             data.assignments.forEach(t => {
                 const dateObj = new Date(t.due_date);
                 const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -105,7 +164,6 @@ async function handleSubmit() {
                     <span class="p-time">${t.time_estimate}h</span>
                 </div>`;
             });
-            // ---------------------------
             
             document.getElementById('predictionList').innerHTML = html;
             const dl = document.getElementById('downloadLink'); dl.href = data.ics_url; dl.download = "Schedule.ics";
@@ -113,21 +171,4 @@ async function handleSubmit() {
         } else alert(data.error);
     } catch(e) { console.error(e); alert("Error"); }
     finally { setTimeout(() => { btn.disabled=false; btn.textContent="Initialize Optimization"; }, 2000); }
-}
-
-const em = document.getElementById('email');
-if(em) {
-    em.addEventListener('blur', async () => {
-        if(!em.value.includes('@')) return;
-        em.style.opacity = "0.5";
-        try {
-            const r = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(em.value)}`);
-            if(r.ok) {
-                const d = await r.json();
-                document.getElementById('studentYear').value = d.year;
-                document.getElementById('timezone').value = d.timezone;
-            }
-        } catch(e) { console.error(e); }
-        finally { em.style.opacity = "1"; }
-    });
 }
