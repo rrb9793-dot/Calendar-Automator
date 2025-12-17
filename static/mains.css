@@ -43,12 +43,14 @@ body {
     font-weight: 400;
 }
 
-/* Updated Logo Style (No Border) */
+/* Updated Logo Style (Transparent + Rounded) */
 .header-logo {
     height: 80px; 
     width: auto;
     object-fit: contain;
     border-radius: 15px; 
+    /* This makes the beige/white background of the image transparent */
+    mix-blend-mode: multiply; 
 }
 
 /* Cards */
