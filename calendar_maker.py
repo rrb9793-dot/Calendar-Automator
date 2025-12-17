@@ -54,6 +54,15 @@ def parse_request_inputs(json_data):
         # Format Dates
         if "due_dates" in df_assignments.columns:
             df_assignments["due_dates"] = pd.to_datetime(df_assignments["due_dates"], format='mixed', errors='coerce')
+            
+            # --- FIX: FORCE TIMEZONE AWARENESS ---
+            # 1. If date has no timezone (Naive), stamp it with the User's Local TZ
+            # 2. If it already has one, convert it to the User's Local TZ
+            if df_assignments["due_dates"].dt.tz is None:
+                df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_localize(local_tz, ambiguous='NaT', nonexistent='shift_forward')
+            else:
+                df_assignments["due_dates"] = df_assignments["due_dates"].dt.tz_convert(local_tz)
+            
             df_assignments = df_assignments.dropna(subset=['due_dates'])
         
         if "time_spent_hours" in df_assignments.columns:
@@ -66,7 +75,7 @@ def parse_request_inputs(json_data):
         else:
             df_assignments["sessions_needed"] = pd.to_numeric(df_assignments["sessions_needed"], errors='coerce').fillna(1).astype(int)
 
-        # NEW: Ensure fixed event flag exists for Exams
+        # Ensure fixed event flag exists for Exams
         if "is_fixed_event" not in df_assignments.columns:
             df_assignments["is_fixed_event"] = False
 
@@ -76,7 +85,7 @@ def parse_request_inputs(json_data):
     return local_tz, work_windows, df_assignments
 
 # ==========================================================
-# BLOCK 3: ICS PARSING (Busy Times)
+# BLOCK 2: ICS PARSING (Busy Times)
 # ==========================================================
 def _to_local_dt(value, local_tz: ZoneInfo):
     if value is None: return None
@@ -195,7 +204,7 @@ def build_free_blocks(WORK_WINDOWS, BUSY_TIMELINE, horizon_start, horizon_end, l
     return FREE_BLOCKS
 
 # ==========================================================
-# BLOCK 4: SESSION GENERATOR
+# BLOCK 3: SESSION GENERATOR
 # ==========================================================
 def generate_sessions_from_assignments(df_assignments):
     sessions = []
@@ -232,7 +241,7 @@ def generate_sessions_from_assignments(df_assignments):
     return sorted(sessions, key=lambda x: x["full_due_dt"])
 
 # ==========================================================
-# BLOCK 5: SCHEDULING ENGINE (The "Tetris" Player)
+# BLOCK 4: SCHEDULING ENGINE (The "Tetris" Player)
 # ==========================================================
 def schedule_sessions_load_balanced(free_blocks_map, sessions, 
                                     max_hours_per_day=8, 
@@ -301,7 +310,7 @@ def schedule_sessions_load_balanced(free_blocks_map, sessions,
     return scheduled, unscheduled
 
 # ==========================================================
-# BLOCK 6: OUTPUT GENERATOR
+# BLOCK 5: OUTPUT GENERATOR
 # ==========================================================
 def create_output_ics(scheduled_tasks, output_path):
     cal = Calendar()
