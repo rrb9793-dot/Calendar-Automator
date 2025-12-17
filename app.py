@@ -73,12 +73,14 @@ def generate_schedule():
         # 2. AGGREGATE ASSIGNMENTS
         all_assignments = []
         
-        # A. Manual Entries (Formatting Fix)
+        # A. Manual Entries (USER OVERRIDES)
         for course in manual_courses:
-            assign_name = course.get('assignment_name', 'Untitled')
+            assign_name = course.get('assignment_name', '').strip()
+            if not assign_name: continue # Skip empty manual entries
+
             course_field = course.get('field_of_study', '')
             
-            # Fix: Only add parens if field exists
+            # Format Name
             if course_field and course_field != "N/A":
                 final_name = f"{assign_name} ({course_field})"
             else:
@@ -128,12 +130,16 @@ def generate_schedule():
 
         # 3. PREDICTION & DB SAVE
         formatted_assignments = []
-        
-        # Categories
         HEAVY_TASKS = ['Coding Assignment', 'Research Paper']
         MEDIUM_TASKS = ['Problem Set', 'Modeling', 'Case Study', 'Creative Writing/Essay']
         
         for i, item in enumerate(all_assignments):
+            # --- FINAL GATEKEEPER CHECK ---
+            raw_name = item.get("Assignment", "").strip()
+            if not raw_name or raw_name == "Untitled": 
+                print(f"⚠️ Skipping BLANK assignment ID {i}", flush=True)
+                continue
+
             category = item.get('Category', 'p_set')
             
             # --- BRANCH 1: MANUAL ---
@@ -178,10 +184,9 @@ def generate_schedule():
                     }
                     predicted_hours = predictive_model.predict_assignment_time(survey_data, assignment_details)
                 else:
-                    # Fake details for logging Exam inputs
                     assignment_details = {"name": "Exam (Fixed)", "duration": "1.25h", "sessions": 1}
+                    predicted_hours = 1.25
 
-            # --- LOGGING REQUESTED ---
             print(f"\n📊 INPUTS FOR '{item.get('Assignment')}':", flush=True)
             print(json.dumps(assignment_details, indent=2), flush=True)
             print(f"   -> Predicted: {predicted_hours}h | Sessions: {sessions_needed}", flush=True)
