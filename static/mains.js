@@ -16,7 +16,6 @@ const LOCATIONS = ["At home/private setting", "School/library", "Other public se
 document.addEventListener('DOMContentLoaded', () => {
     console.log("🚀 ParselAI Frontend Initialized");
 
-    // 1. Populate Dropdowns
     const majorSel = document.getElementById('major');
     const secSel = document.getElementById('second_concentration');
     const minorSel = document.getElementById('minor');
@@ -33,14 +32,10 @@ document.addEventListener('DOMContentLoaded', () => {
     addOpts(secSel, true);
     addOpts(minorSel, true);
 
-    // 2. Init Time Pickers
     initTimePickers();
-    
-    // 3. Add Initial Rows
     addAssignmentRow();
     addPdfRow();
 
-    // 4. Attach General Event Listeners
     const addAssignBtn = document.getElementById('addAssignmentBtn');
     if (addAssignBtn) addAssignBtn.addEventListener('click', addAssignmentRow);
 
@@ -50,63 +45,32 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitBtn = document.getElementById('submitBtn');
     if (submitBtn) submitBtn.addEventListener('click', handleSubmit);
 
-    // --- 5. AUTOFILL LOGIC (FIXED) ---
     const emailInput = document.getElementById('email');
-
     if (emailInput) {
-        console.log("✅ Email Input Found - Attaching Listeners");
-        
-        // Listener 1: Blur (Clicking out)
-        emailInput.addEventListener('blur', () => {
-            console.log("👀 Blur Event Detected");
-            fetchUserPreferences(emailInput);
-        });
-
-        // Listener 2: Enter Key
+        emailInput.addEventListener('blur', () => fetchUserPreferences(emailInput));
         emailInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
-                console.log("↵ Enter Key Detected");
                 e.preventDefault(); 
                 fetchUserPreferences(emailInput);
                 emailInput.blur(); 
             }
         });
-    } else {
-        console.error("❌ CRITICAL: Email input field not found in DOM");
     }
 });
 
-// --- HELPER FUNCTIONS ---
-
 async function fetchUserPreferences(emailInput) {
     const email = emailInput.value.trim();
-    if (!email || !email.includes('@')) {
-        console.log("⚠️ Invalid email, skipping fetch");
-        return;
-    }
+    if (!email || !email.includes('@')) return;
 
-    console.log(`🔍 Fetching preferences for: ${email}`);
     emailInput.style.opacity = "0.5"; 
-
     try {
         const res = await fetch(`/api/get-user-preferences?email=${encodeURIComponent(email)}`);
-        
-        if (!res.ok) {
-            console.warn("⚠️ User not found in DB (404)");
-            emailInput.style.opacity = "1";
-            return;
-        }
-
+        if (!res.ok) { emailInput.style.opacity = "1"; return; }
         const data = await res.json();
-        console.log("✅ DB Data Received:", data);
 
-        // Helper to set values safely
         const setVal = (id, val) => {
             const el = document.getElementById(id);
-            if (el && val && val !== 'null') {
-                console.log(`   -> Setting ${id} to "${val}"`);
-                el.value = val;
-            }
+            if (el && val && val !== 'null') el.value = val;
         };
 
         setVal('studentYear', data.year);
@@ -115,20 +79,14 @@ async function fetchUserPreferences(emailInput) {
         setVal('second_concentration', data.second_concentration);
         setVal('minor', data.minor);
 
-        // Helper to set Time Pickers
         const setTime = (id, val) => {
             if(!val || val === 'null') return;
             let [h, m] = val.split(':');
-            if (h.length === 1) h = '0' + h; // Pad single digits (9 -> 09)
-            
+            if (h.length === 1) h = '0' + h;
             const el = document.getElementById(id);
             if(el) {
                 const selects = el.querySelectorAll('select');
-                if(selects.length === 2) { 
-                    console.log(`   -> Setting ${id} to ${h}:${m}`);
-                    selects[0].value = h; 
-                    selects[1].value = m; 
-                }
+                if(selects.length === 2) { selects[0].value = h; selects[1].value = m; }
             }
         };
 
@@ -136,14 +94,9 @@ async function fetchUserPreferences(emailInput) {
         setTime('weekdayEnd', data.weekdayEnd);
         setTime('weekendStart', data.weekendStart);
         setTime('weekendEnd', data.weekendEnd);
+        emailInput.style.borderColor = "#10b981";
 
-        emailInput.style.borderColor = "#10b981"; // Success Green
-
-    } catch (err) {
-        console.error("❌ Autofill Error:", err);
-    } finally {
-        emailInput.style.opacity = "1";
-    }
+    } catch (err) { console.error(err); } finally { emailInput.style.opacity = "1"; }
 }
 
 function initTimePickers() {
@@ -159,13 +112,9 @@ function initTimePickers() {
             let val = i < 10 ? '0'+i : i;
             minSel.add(new Option(val, val));
         }
-        
-        const defaultVal = container.dataset.default || "09:00";
-        const defTime = defaultVal.split(':');
-        
+        const defTime = (container.dataset.default || "09:00").split(':');
         hourSel.value = defTime[0]; 
         minSel.value = defTime[1]; 
-        
         container.appendChild(hourSel);
         container.innerHTML += '<span style="margin:0 5px; font-weight:bold;">:</span>';
         container.appendChild(minSel);
@@ -176,81 +125,41 @@ function getPickerValue(id) {
     const container = document.getElementById(id);
     if (!container) return "00:00";
     const selects = container.querySelectorAll('select');
-    if (selects.length < 2) return "00:00";
-    return `${selects[0].value}:${selects[1].value}`;
+    return selects.length < 2 ? "00:00" : `${selects[0].value}:${selects[1].value}`;
 }
 
-const assignmentsContainer = document.getElementById('assignmentsContainer');
-
 function addAssignmentRow() {
+    const assignmentsContainer = document.getElementById('assignmentsContainer');
     if (!assignmentsContainer) return;
     const div = document.createElement('div');
     div.className = 'syllabus-row';
     const buildOpts = (arr) => arr.map(x => `<option value="${x}">${x}</option>`).join('');
 
     div.innerHTML = `
-        <div class="span-2">
-            <label style="font-size:0.7rem;">Assignment Name</label>
-            <input type="text" class="a-name" placeholder="Task Name">
-        </div>
-        <div>
-            <label style="font-size:0.7rem;">Due Date</label>
-            <input type="date" class="a-date">
-        </div>
-        <div>
-            <label style="font-size:0.7rem;">Sessions Needed</label>
-            <input type="number" class="a-sessions" value="1" min="1">
-        </div>
-        <div>
-            <label style="font-size:0.7rem;">Type</label>
-            <select class="a-type"><option value="">Select...</option>${buildOpts(ASSIGNMENT_TYPES)}</select>
-        </div>
-        <div>
-            <label style="font-size:0.7rem;">Field of Study</label>
-            <select class="a-field"><option value="">Select...</option>${buildOpts(MAJORS)}</select>
-        </div>
-        <div>
-            <label style="font-size:0.7rem;">Resources</label>
-            <select class="a-resource">${buildOpts(RESOURCES)}</select>
-        </div>
-        <div>
-            <label style="font-size:0.7rem;">Location</label>
-            <select class="a-location">${buildOpts(LOCATIONS)}</select>
-        </div>
+        <div class="span-2"><label style="font-size:0.7rem;">Assignment Name</label><input type="text" class="a-name" placeholder="Task Name"></div>
+        <div><label style="font-size:0.7rem;">Due Date</label><input type="date" class="a-date"></div>
+        <div><label style="font-size:0.7rem;">Sessions Needed</label><input type="number" class="a-sessions" value="1" min="1"></div>
+        <div><label style="font-size:0.7rem;">Type</label><select class="a-type"><option value="">Select...</option>${buildOpts(ASSIGNMENT_TYPES)}</select></div>
+        <div><label style="font-size:0.7rem;">Field of Study</label><select class="a-field"><option value="">Select...</option>${buildOpts(MAJORS)}</select></div>
+        <div><label style="font-size:0.7rem;">Resources</label><select class="a-resource">${buildOpts(RESOURCES)}</select></div>
+        <div><label style="font-size:0.7rem;">Location</label><select class="a-location">${buildOpts(LOCATIONS)}</select></div>
         <div class="span-2 checkbox-group">
-            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
-                <input type="checkbox" class="a-group" style="width:auto; margin-right:5px;"> Work in Group?
-            </label>
-            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;">
-                <input type="checkbox" class="a-person" style="width:auto; margin-right:5px;"> Submit In-Person?
-            </label>
+            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;"><input type="checkbox" class="a-group" style="width:auto; margin-right:5px;"> Work in Group?</label>
+            <label style="font-size:0.75rem; display:flex; align-items:center; cursor:pointer;"><input type="checkbox" class="a-person" style="width:auto; margin-right:5px;"> Submit In-Person?</label>
         </div>
-        <div class="span-2" style="text-align:right;">
-            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove Task</button>
-        </div>
+        <div class="span-2" style="text-align:right;"><button class="btn-delete" onclick="this.parentElement.parentElement.remove()">Remove Task</button></div>
     `;
     assignmentsContainer.appendChild(div);
 }
 
-// --- FIXED PDF ROW (REMOVED MANUAL INPUT) ---
 function addPdfRow() {
     const pdfContainer = document.getElementById('pdfContainer');
     if (!pdfContainer) return;
-
     const div = document.createElement('div');
     div.className = 'syllabus-row'; 
-    // Revert to simple 2-column layout (File + Delete Button)
     div.style.gridTemplateColumns = "1fr 50px"; 
-    
-    div.innerHTML = `
-        <div>
-            <label style="font-size:0.7rem;">Syllabus PDF</label>
-            <input type="file" class="pdf-file" accept=".pdf">
-        </div>
-        <div style="text-align:right; display:flex; align-items:end; justify-content:end;">
-            <button class="btn-delete" onclick="this.parentElement.parentElement.remove()">X</button>
-        </div>
-    `;
+    div.innerHTML = `<div><label style="font-size:0.7rem;">Syllabus PDF</label><input type="file" class="pdf-file" accept=".pdf"></div>
+        <div style="text-align:right; display:flex; align-items:end; justify-content:end;"><button class="btn-delete" onclick="this.parentElement.parentElement.remove()">X</button></div>`;
     pdfContainer.appendChild(div);
 }
 
@@ -297,20 +206,23 @@ async function handleSubmit() {
         const formData = new FormData();
         formData.append('data', JSON.stringify({ survey: surveyData, courses: courses, preferences: preferences }));
 
-        // PDF Processing (Updated to remove manual course name logic)
         let pdfIndex = 0;
         document.querySelectorAll('#pdfContainer .syllabus-row').forEach(row => {
             const fileInput = row.querySelector('.pdf-file');
             if (fileInput && fileInput.files.length > 0) {
                 formData.append(`pdf_${pdfIndex}`, fileInput.files[0]);
-                // No manual name needed
                 pdfIndex++;
             }
         });
         formData.append('pdf_count', pdfIndex);
 
+        // UPDATED: Multi-calendar support
         const icsInput = document.getElementById('icsUpload');
-        if(icsInput && icsInput.files.length > 0) formData.append('ics', icsInput.files[0]);
+        if(icsInput && icsInput.files.length > 0) {
+            for (let i = 0; i < icsInput.files.length; i++) {
+                formData.append('ics', icsInput.files[i]);
+            }
+        }
 
         const response = await fetch('/api/generate-schedule', { method: 'POST', body: formData });
         const result = await response.json();
@@ -320,43 +232,20 @@ async function handleSubmit() {
             const resultArea = document.getElementById('resultArea');
             const downloadLink = document.getElementById('downloadLink');
             const predictionList = document.getElementById('predictionList');
-
             resultArea.style.display = 'block';
 
             if (result.assignments && result.assignments.length > 0) {
                 let html = '<div class="prediction-header"><h5>Calculated Workloads</h5></div>';
-                
                 result.assignments.forEach(task => {
                     const dateObj = new Date(task.due_date);
                     const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                     const timeStr = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-                    
-                    html += `
-                        <div class="prediction-row">
-                            <div class="p-info">
-                                <span class="p-name">${task.name}</span>
-                                <span class="p-date">Due: ${dateStr} @ ${timeStr}</span>
-                            </div>
-                            <span class="p-time">${task.time_estimate}h</span>
-                        </div>
-                    `;
+                    html += `<div class="prediction-row"><div class="p-info"><span class="p-name">${task.name}</span><span class="p-date">Due: ${dateStr} @ ${timeStr}</span></div><span class="p-time">${task.time_estimate}h</span></div>`;
                 });
-                
                 predictionList.innerHTML = html;
             }
-
-            if (result.ics_url) {
-                downloadLink.href = result.ics_url;
-                downloadLink.download = "My_Study_Schedule.ics";
-            }
+            if (result.ics_url) { downloadLink.href = result.ics_url; downloadLink.download = "My_Study_Schedule.ics"; }
             resultArea.scrollIntoView({ behavior: 'smooth' });
-        } else {
-            alert("Error: " + (result.error || "Unknown"));
-        }
-    } catch (e) {
-        console.error(e);
-        alert("Request failed. See console.");
-    } finally {
-        setTimeout(() => { btn.disabled = false; btn.textContent = "Initialize Optimization"; }, 2000);
-    }
+        } else { alert("Error: " + (result.error || "Unknown")); }
+    } catch (e) { console.error(e); alert("Request failed."); } finally { setTimeout(() => { btn.disabled = false; btn.textContent = "Initialize Optimization"; }, 2000); }
 }
